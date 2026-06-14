@@ -212,7 +212,7 @@ def get_pesticide_guide(crops):
 # are used so the app never shows empty data.
 
 DATAGOV_RESOURCE_ID = "9ef84268-d588-465a-a308-a864a43d0070"
-DATAGOV_BASE_URL    = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
+DATAGOV_BASE_URL    = "https://www.data.gov.in/resources/api/v2"
 
 # Canonical commodity name mapping: raw API names → display names
 COMMODITY_DISPLAY = {
