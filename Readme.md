@@ -7,20 +7,18 @@ sdk: docker
 app_port: 7860
 pinned: false
 ---
+
 # 🌿 SmartAgro — AI-Powered Precision Agriculture Platform 
 
 <div align="center"> 
 
-<!-- Animated SVG Banner -->
-
-> ![SmartAgro](https://img.shields.io/badge/SmartAgro-Precision%20Agriculture-22c55e?style=for-the-badge&logo=leaf&logoColor=white)
-> ```
+![SmartAgro](https://img.shields.io/badge/SmartAgro-Precision%20Agriculture-22c55e?style=for-the-badge&logo=leaf&logoColor=white)
 
 <br/>
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![Flask](https://img.shields.io/badge/Flask-3.0-000000?style=flat-square&logo=flask&logoColor=white)](https://flask.palletsprojects.com)
-[![Deployed on Render](https://img.shields.io/badge/Deployed%20on-Render-46E3B7?style=flat-square&logo=render&logoColor=white)](https://render.com)
+[![Deployed on Hugging Face](https://img.shields.io/badge/Deployed%20on-Hugging%20Face-FFD21E?style=flat-square&logo=huggingface&logoColor=black)](https://huggingface.co/spaces/AlphaCoder7206/Smartagro)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![Made for India](https://img.shields.io/badge/Made%20for-India%20🇮🇳-FF9933?style=flat-square)](https://github.com)
 
@@ -28,7 +26,7 @@ pinned: false
 
 ### 🚀 Live Demo
 
-## 👉 [Click Here to Open the App](https://smartagro-pi6m.onrender.com)
+## 👉 [Click Here to Open the App](https://huggingface.co/spaces/AlphaCoder7206/Smartagro)
 
 </div>
 
@@ -103,82 +101,8 @@ pinned: false
 | **Charts** | Chart.js |
 | **Icons** | Font Awesome 6 |
 | **Fonts** | Google Fonts — Syne, Inter |
-| **Deployment** | Render |
+| **Deployment** | Hugging Face Spaces (Docker) |
 
 ---
 
 ## 📁 Project Structure
-
-```
-SmartAgro/
-│
-├── app.py                   # Flask application & all API routes
-├── requirements.txt         # Python dependencies
-├── runtime.txt              # Python version for Render
-├── .env.example             # Example environment variables
-├── .gitignore
-│
-├── assets/
-│   └── banner.svg           # Animated banner for README
-│
-├── templates/
-│   ├── index.html           # Dashboard
-│   ├── diagnose.html        # AI Crop Diagnosis
-│   ├── market.html          # Market Prices
-│   └── alerts.html          # Smart Alerts
-│
-└── static/
-    ├── css/
-    │   ├── main.css          # Global styles & design tokens
-    │   └── market.css        # Market page styles
-    └── js/
-        ├── main.js           # Global JS — navbar, toast, animations
-        ├── market.js         # Market page logic
-        └── translations.js   # Multilingual support
-```
-
-## 🔑 Environment Variables
-
-| Variable | Where to Get | Free Tier |
-|---|---|---|
-| `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) | ✅ Free |
-| `OPENWEATHER_API_KEY` | [openweathermap.org/api](https://openweathermap.org/api) | ✅ Free |
-| `NINJA_API_KEY` | [api-ninjas.com](https://api-ninjas.com) | ✅ 50,000 req/month free |
-
-> ⚠️ Never commit your `.env` file to GitHub. It is already listed in `.gitignore`.
-
----
-
-## 🔌 API Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/` | Dashboard page |
-| `GET` | `/diagnose` | Crop diagnosis page |
-| `GET` | `/market` | Market prices page |
-| `GET` | `/alerts` | Alerts page |
-| `GET` | `/api/weather?lat=&lon=` | Current weather + 7-day forecast |
-| `GET` | `/api/market?location=` | Market prices with optional city filter |
-| `POST` | `/api/diagnose` | AI crop disease diagnosis |
-| `POST` | `/api/crop-recommendations` | Crop recommendations by weather data |
-| `POST` | `/api/alerts` | Weather-based smart farming alerts |
-
----
-
-## 🙏 Acknowledgements
-
-- [Groq](https://groq.com) — blazing fast AI inference
-- [OpenWeatherMap](https://openweathermap.org) — reliable weather data
-- [API Ninjas](https://api-ninjas.com) — commodity price data
-- [Chart.js](https://chartjs.org) — beautiful interactive charts
-- [Font Awesome](https://fontawesome.com) — icon library
-
----
-
-<div align="center">
-
-**Built for India's farmers 🌾**
-
-If this project helped you, please consider giving it a ⭐
-
-</div>
