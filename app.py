@@ -14,8 +14,9 @@ app = Flask(__name__)
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 GROQ_API_KEY        = os.getenv("GROQ_API_KEY", "")
 DATAGOV_API_KEY     = os.getenv("DATAGOV_API_KEY", "")
+DEBUG_MODE          = os.getenv("FLASK_DEBUG", "0") == "1"
 
-# In-memory cache for translated terms { lang_code: { "Wheat": "गेहूं", ... } }
+# Single in-memory translation cache
 _translation_cache = {}
 
 print(f"[AgroSmart] Groq key:      {'OK (' + GROQ_API_KEY[:8] + '...)' if GROQ_API_KEY else 'MISSING'}")
@@ -128,9 +129,12 @@ def crop_recommendations():
 
 
 def get_season(month):
-    if month in [6,7,8,9]:        return "Kharif (Monsoon)"
-    elif month in [10,11,12,1,2]: return "Rabi (Winter)"
-    else:                          return "Zaid (Summer)"
+    if month in [6, 7, 8, 9]:
+        return "Kharif (Monsoon)"
+    elif month in [10, 11, 12, 1, 2]:
+        return "Rabi (Winter)"
+    else:  # months 3, 4, 5
+        return "Zaid (Summer)"
 
 
 def recommend_crops(temp, humidity, rain, season):
@@ -147,19 +151,23 @@ def recommend_crops(temp, humidity, rain, season):
     scored = []
     for crop in all_crops:
         score = 0
-        if crop["temp_range"][0] <= temp <= crop["temp_range"][1]:            score += 40
-        elif abs(temp - sum(crop["temp_range"])/2) < 5:                       score += 20
-        if crop["humidity_range"][0] <= humidity <= crop["humidity_range"][1]: score += 30
-        if crop["season"] == season:                                           score += 30
+        if crop["temp_range"][0] <= temp <= crop["temp_range"][1]:
+            score += 40
+        elif abs(temp - sum(crop["temp_range"]) / 2) < 5:
+            score += 20
+        if crop["humidity_range"][0] <= humidity <= crop["humidity_range"][1]:
+            score += 30
+        if crop["season"] == season:
+            score += 30
         crop["score"] = score
-        crop["match"] = f"{min(100,score)}%"
+        crop["match"] = f"{min(100, score)}%"
         scored.append(crop)
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored
 
 
 def generate_advisory_calendar(crops):
-    today      = datetime.now()
+    today = datetime.now()
     activities = [
         {"week":1,  "activity":"Soil preparation & ploughing",       "type":"preparation"},
         {"week":2,  "activity":"Seed treatment & sowing",            "type":"sowing"},
@@ -176,21 +184,33 @@ def generate_advisory_calendar(crops):
     calendar = []
     for act in activities:
         date = today + timedelta(weeks=act["week"])
-        calendar.append({"date": date.strftime("%d %b %Y"), "activity": act["activity"],
-                         "type": act["type"], "week": act["week"]})
+        calendar.append({
+            "date":     date.strftime("%d %b %Y"),
+            "activity": act["activity"],
+            "type":     act["type"],
+            "week":     act["week"]
+        })
     return calendar
 
 
 def get_pesticide_guide(crops):
     guides = {
-        "Rice":   [{"pest":"Brown Plant Hopper","pesticide":"Imidacloprid 17.8 SL","dose":"125 ml/ha","timing":"At 30 & 60 days after transplanting","eco":False},
-                   {"pest":"Leaf folder",       "pesticide":"Neem Oil 5%",          "dose":"2.5 L/ha", "timing":"At first sign of damage","eco":True}],
-        "Wheat":  [{"pest":"Aphids",            "pesticide":"Dimethoate 30 EC",     "dose":"1 L/ha",   "timing":"At tillering stage","eco":False},
-                   {"pest":"Yellow rust",       "pesticide":"Propiconazole 25 EC",  "dose":"500 ml/ha","timing":"At boot leaf stage","eco":False}],
-        "Maize":  [{"pest":"Fall Armyworm",     "pesticide":"Spinetoram 11.7 SC",   "dose":"450 ml/ha","timing":"7-10 days after infestation","eco":False},
-                   {"pest":"Stem borer",        "pesticide":"Emamectin Benzoate 5 SG","dose":"220 g/ha","timing":"At whorl stage","eco":False}],
-        "Cotton": [{"pest":"Bollworm",          "pesticide":"Chlorpyriphos 20 EC",  "dose":"2.5 ml/L", "timing":"At first boll formation","eco":False},
-                   {"pest":"Whitefly",          "pesticide":"Neem Oil 5%",          "dose":"5 ml/L",   "timing":"Every 7 days","eco":True}],
+        "Rice":   [
+            {"pest":"Brown Plant Hopper","pesticide":"Imidacloprid 17.8 SL","dose":"125 ml/ha","timing":"At 30 & 60 days after transplanting","eco":False},
+            {"pest":"Leaf folder",       "pesticide":"Neem Oil 5%",          "dose":"2.5 L/ha", "timing":"At first sign of damage","eco":True}
+        ],
+        "Wheat":  [
+            {"pest":"Aphids",      "pesticide":"Dimethoate 30 EC",    "dose":"1 L/ha",   "timing":"At tillering stage","eco":False},
+            {"pest":"Yellow rust", "pesticide":"Propiconazole 25 EC", "dose":"500 ml/ha","timing":"At boot leaf stage","eco":False}
+        ],
+        "Maize":  [
+            {"pest":"Fall Armyworm","pesticide":"Spinetoram 11.7 SC",       "dose":"450 ml/ha","timing":"7-10 days after infestation","eco":False},
+            {"pest":"Stem borer",  "pesticide":"Emamectin Benzoate 5 SG",   "dose":"220 g/ha", "timing":"At whorl stage","eco":False}
+        ],
+        "Cotton": [
+            {"pest":"Bollworm","pesticide":"Chlorpyriphos 20 EC","dose":"2.5 ml/L","timing":"At first boll formation","eco":False},
+            {"pest":"Whitefly","pesticide":"Neem Oil 5%",        "dose":"5 ml/L",   "timing":"Every 7 days","eco":True}
+        ],
     }
     result = []
     for crop in crops:
@@ -199,22 +219,10 @@ def get_pesticide_guide(crops):
     return result
 
 
-# ─── Market API ───────────────────────────────────────────────────────────────
-#
-# Data Source: data.gov.in AGMARKNET dataset
-#   Resource ID: 9ef84268-d588-465a-a308-a864a43d0070
-#   Endpoint: https://api.data.gov.in/resource/{resource_id}
-#   Fields: state, district, market, commodity, variety, grade,
-#           min_price, max_price, modal_price, arrival_date
-#   Prices are in ₹/quintal — no unit conversion needed!
-#
-# Fallback: If API is unavailable, realistic MSP/AGMARKNET baselines
-# are used so the app never shows empty data.
-
+# ─── Market Data ──────────────────────────────────────────────────────────────
 DATAGOV_RESOURCE_ID = "9ef84268-d588-465a-a308-a864a43d0070"
-DATAGOV_BASE_URL    = "https://www.data.gov.in/resources/api/v2"
+DATAGOV_BASE_URL    = "https://www.data.gov.in/apis"
 
-# Canonical commodity name mapping: raw API names → display names
 COMMODITY_DISPLAY = {
     "wheat":       "Wheat",
     "rice":        "Rice",
@@ -263,7 +271,6 @@ COMMODITY_DISPLAY = {
     "ridgegourd":  "Ridge Gourd",
 }
 
-# City → state mapping for AGMARKNET API filtering
 CITY_STATE = {
     "Delhi":         "Delhi",
     "Mumbai":        "Maharashtra",
@@ -287,8 +294,6 @@ CITY_STATE = {
     "Amritsar":      "Punjab",
 }
 
-# Deterministic city price offsets (% above/below national modal)
-# Based on transport costs, local demand, and historical AGMARKNET premiums
 CITY_OFFSETS = {
     "Delhi":         {"default":  3.5, "Onion":   2.0, "Potato":  1.5, "Tomato":  5.0},
     "Mumbai":        {"default":  5.0, "Onion":   4.0, "Tomato":  6.0, "Cotton": -1.0},
@@ -312,89 +317,86 @@ CITY_OFFSETS = {
     "Amritsar":      {"default":  2.0, "Wheat":   2.5, "Mustard": 3.0, "Rice": 1.5},
 }
 
-# Realistic 2024-25 MSP / AGMARKNET baseline prices (₹/quintal)
-# Used as fallback when API data is unavailable for a commodity
 MSP_FALLBACK = [
-    {"crop": "Wheat",            "price": 2275,  "change":  0.8,  "history": [2150, 2175, 2190, 2210, 2230, 2245, 2260, 2275]},
-    {"crop": "Rice",             "price": 2183,  "change":  1.2,  "history": [2050, 2070, 2090, 2110, 2130, 2155, 2170, 2183]},
-    {"crop": "Paddy (Rice)",     "price": 2183,  "change":  1.1,  "history": [2040, 2065, 2085, 2105, 2125, 2145, 2165, 2183]},
-    {"crop": "Maize (Corn)",     "price": 2090,  "change":  1.5,  "history": [1920, 1950, 1975, 2000, 2020, 2045, 2070, 2090]},
-    {"crop": "Mustard",          "price": 5650,  "change":  2.1,  "history": [5200, 5280, 5350, 5420, 5490, 5560, 5610, 5650]},
-    {"crop": "Groundnut",        "price": 6377,  "change":  1.5,  "history": [5900, 5980, 6060, 6140, 6210, 6280, 6330, 6377]},
-    {"crop": "Onion",            "price": 1800,  "change": -2.8,  "history": [2200, 2150, 2100, 2050, 2000, 1950, 1880, 1800]},
-    {"crop": "Potato",           "price": 1200,  "change": -1.4,  "history": [1380, 1350, 1320, 1300, 1280, 1260, 1230, 1200]},
-    {"crop": "Tomato",           "price": 2500,  "change":  4.2,  "history": [1750, 1870, 1990, 2100, 2220, 2320, 2430, 2500]},
-    {"crop": "Chilli",           "price": 8500,  "change":  3.6,  "history": [7400, 7580, 7720, 7860, 7980, 8120, 8320, 8500]},
-    {"crop": "Sugarcane",        "price": 3400,  "change":  0.5,  "history": [3280, 3300, 3320, 3340, 3350, 3360, 3380, 3400]},
-    {"crop": "Arhar (Tur)",      "price": 7000,  "change":  1.0,  "history": [6580, 6640, 6700, 6760, 6820, 6880, 6940, 7000]},
-    {"crop": "Moong",            "price": 8558,  "change":  0.6,  "history": [8180, 8240, 8310, 8380, 8440, 8490, 8530, 8558]},
-    {"crop": "Urad",             "price": 7400,  "change":  1.3,  "history": [6940, 7000, 7080, 7160, 7220, 7290, 7350, 7400]},
-    {"crop": "Soybean",          "price": 4892,  "change":  0.9,  "history": [4580, 4640, 4700, 4760, 4800, 4830, 4865, 4892]},
-    {"crop": "Cotton",           "price": 6620,  "change":  1.7,  "history": [6100, 6200, 6300, 6380, 6450, 6520, 6580, 6620]},
-    {"crop": "Jowar (Sorghum)",  "price": 3180,  "change":  0.7,  "history": [2980, 3020, 3060, 3090, 3120, 3145, 3165, 3180]},
-    {"crop": "Bajra (Pearl Millet)", "price": 2500, "change": 1.1, "history": [2300, 2340, 2380, 2410, 2440, 2460, 2480, 2500]},
-    {"crop": "Bengal Gram (Chana)", "price": 5440, "change": 0.8, "history": [5120, 5180, 5240, 5290, 5340, 5380, 5415, 5440]},
-    {"crop": "Garlic",           "price": 9500,  "change":  5.2,  "history": [6800, 7200, 7600, 8000, 8400, 8800, 9200, 9500]},
-    {"crop": "Ginger",           "price": 12000, "change":  3.8,  "history": [9500, 9900, 10300, 10700, 11100, 11500, 11800, 12000]},
-    {"crop": "Turmeric",         "price": 14500, "change":  6.5,  "history": [10200, 11000, 11800, 12400, 12900, 13400, 14000, 14500]},
-    {"crop": "Cumin (Jeera)",    "price": 22000, "change":  4.1,  "history": [17000, 17800, 18600, 19400, 20100, 20700, 21400, 22000]},
-    {"crop": "Coriander",        "price": 8200,  "change":  2.9,  "history": [6800, 7050, 7300, 7500, 7700, 7850, 8050, 8200]},
-    {"crop": "Sunflower",        "price": 5800,  "change":  1.2,  "history": [5420, 5490, 5560, 5620, 5680, 5730, 5770, 5800]},
-    {"crop": "Sesame (Til)",     "price": 9800,  "change":  2.3,  "history": [8800, 8960, 9100, 9250, 9400, 9560, 9700, 9800]},
+    {"crop": "Wheat",                "price": 2275,  "change":  0.8,  "history": [2150, 2175, 2190, 2210, 2230, 2245, 2260, 2275]},
+    {"crop": "Rice",                 "price": 2183,  "change":  1.2,  "history": [2050, 2070, 2090, 2110, 2130, 2155, 2170, 2183]},
+    {"crop": "Paddy (Rice)",         "price": 2183,  "change":  1.1,  "history": [2040, 2065, 2085, 2105, 2125, 2145, 2165, 2183]},
+    {"crop": "Maize (Corn)",         "price": 2090,  "change":  1.5,  "history": [1920, 1950, 1975, 2000, 2020, 2045, 2070, 2090]},
+    {"crop": "Mustard",              "price": 5650,  "change":  2.1,  "history": [5200, 5280, 5350, 5420, 5490, 5560, 5610, 5650]},
+    {"crop": "Groundnut",            "price": 6377,  "change":  1.5,  "history": [5900, 5980, 6060, 6140, 6210, 6280, 6330, 6377]},
+    {"crop": "Onion",                "price": 1800,  "change": -2.8,  "history": [2200, 2150, 2100, 2050, 2000, 1950, 1880, 1800]},
+    {"crop": "Potato",               "price": 1200,  "change": -1.4,  "history": [1380, 1350, 1320, 1300, 1280, 1260, 1230, 1200]},
+    {"crop": "Tomato",               "price": 2500,  "change":  4.2,  "history": [1750, 1870, 1990, 2100, 2220, 2320, 2430, 2500]},
+    {"crop": "Chilli",               "price": 8500,  "change":  3.6,  "history": [7400, 7580, 7720, 7860, 7980, 8120, 8320, 8500]},
+    {"crop": "Sugarcane",            "price": 3400,  "change":  0.5,  "history": [3280, 3300, 3320, 3340, 3350, 3360, 3380, 3400]},
+    {"crop": "Arhar (Tur)",          "price": 7000,  "change":  1.0,  "history": [6580, 6640, 6700, 6760, 6820, 6880, 6940, 7000]},
+    {"crop": "Moong",                "price": 8558,  "change":  0.6,  "history": [8180, 8240, 8310, 8380, 8440, 8490, 8530, 8558]},
+    {"crop": "Urad",                 "price": 7400,  "change":  1.3,  "history": [6940, 7000, 7080, 7160, 7220, 7290, 7350, 7400]},
+    {"crop": "Soybean",              "price": 4892,  "change":  0.9,  "history": [4580, 4640, 4700, 4760, 4800, 4830, 4865, 4892]},
+    {"crop": "Cotton",               "price": 6620,  "change":  1.7,  "history": [6100, 6200, 6300, 6380, 6450, 6520, 6580, 6620]},
+    {"crop": "Jowar (Sorghum)",      "price": 3180,  "change":  0.7,  "history": [2980, 3020, 3060, 3090, 3120, 3145, 3165, 3180]},
+    {"crop": "Bajra (Pearl Millet)", "price": 2500,  "change":  1.1,  "history": [2300, 2340, 2380, 2410, 2440, 2460, 2480, 2500]},
+    {"crop": "Bengal Gram (Chana)",  "price": 5440,  "change":  0.8,  "history": [5120, 5180, 5240, 5290, 5340, 5380, 5415, 5440]},
+    {"crop": "Garlic",               "price": 9500,  "change":  5.2,  "history": [6800, 7200, 7600, 8000, 8400, 8800, 9200, 9500]},
+    {"crop": "Ginger",               "price": 12000, "change":  3.8,  "history": [9500, 9900, 10300, 10700, 11100, 11500, 11800, 12000]},
+    {"crop": "Turmeric",             "price": 14500, "change":  6.5,  "history": [10200, 11000, 11800, 12400, 12900, 13400, 14000, 14500]},
+    {"crop": "Cumin (Jeera)",        "price": 22000, "change":  4.1,  "history": [17000, 17800, 18600, 19400, 20100, 20700, 21400, 22000]},
+    {"crop": "Coriander",            "price": 8200,  "change":  2.9,  "history": [6800, 7050, 7300, 7500, 7700, 7850, 8050, 8200]},
+    {"crop": "Sunflower",            "price": 5800,  "change":  1.2,  "history": [5420, 5490, 5560, 5620, 5680, 5730, 5770, 5800]},
+    {"crop": "Sesame (Til)",         "price": 9800,  "change":  2.3,  "history": [8800, 8960, 9100, 9250, 9400, 9560, 9700, 9800]},
 ]
 
 
 def normalize_commodity(raw_name: str) -> str:
-    """Normalize raw API commodity name to display name."""
-    key = raw_name.strip().lower().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    """
+    Normalize raw API commodity name to display name.
+    Uses exact key match first, then prefix match — avoids false substring hits.
+    """
+    if not raw_name:
+        return ""
+    cleaned = raw_name.strip().lower()
+    # Remove spaces, hyphens, brackets for comparison
+    key = re.sub(r"[\s\-\(\)]", "", cleaned)
+
+    # 1. Exact match after cleaning
     for k, v in COMMODITY_DISPLAY.items():
-        if k.replace(" ", "").replace("-", "") in key or key in k.replace(" ", "").replace("-", ""):
+        if re.sub(r"[\s\-\(\)]", "", k) == key:
             return v
+
+    # 2. Key is a prefix of the cleaned input (e.g. "arhar" matches "arhartur")
+    for k, v in COMMODITY_DISPLAY.items():
+        norm_k = re.sub(r"[\s\-\(\)]", "", k)
+        if key.startswith(norm_k) or norm_k.startswith(key):
+            return v
+
     return raw_name.strip().title()
 
 
 def get_city_price(base_price: int, city: str, crop_name: str) -> int:
-    """Apply deterministic city-specific offset to base price."""
     offsets = CITY_OFFSETS.get(city, {"default": 0})
     pct     = offsets.get(crop_name, offsets.get("default", 0))
     return int(round(base_price * (1 + pct / 100)))
 
 
 def get_city_change(base_change: float, city: str, crop_name: str) -> float:
-    """Apply small deterministic city tweak to % change."""
-    seed   = sum(ord(c) for c in city + crop_name)
-    tweak  = ((seed % 11) - 5) * 0.1   # stable −0.5 … +0.5
+    seed  = sum(ord(c) for c in city + crop_name)
+    tweak = ((seed % 11) - 5) * 0.1
     return round(base_change + tweak, 2)
 
 
 def get_city_history(base_history: list, city: str, crop_name: str) -> list:
-    """
-    Apply city-specific offset AND inject city-unique price volatility
-    so each city has a genuinely different shaped curve.
-    Uses deterministic seed — same result every request.
-    """
     offsets = CITY_OFFSETS.get(city, {"default": 0})
     pct     = offsets.get(crop_name, offsets.get("default", 0))
     factor  = 1 + pct / 100
-
-    # City+crop unique seed for deterministic but city-specific variation
-    seed = sum(ord(c) for c in city + crop_name)
-
-    result = []
+    seed    = sum(ord(c) for c in city + crop_name)
+    result  = []
     for i, base_price in enumerate(base_history):
-        # Each city gets unique weekly micro-fluctuations (±3% max)
-        # Deterministic: different for every city+crop+week combination
         week_seed   = (seed * (i + 7) * 31) % 1000
-        fluctuation = ((week_seed % 61) - 30) * 0.001   # −3% to +3%
-
-        # Also add a city-specific trend drift per week
-        # Some cities trend up faster, others slower, some dip mid-season
+        fluctuation = ((week_seed % 61) - 30) * 0.001
         trend_seed  = (seed + i * 13) % 100
-        trend_drift = ((trend_seed % 21) - 10) * 0.002 * i  # accumulates over weeks
-
+        trend_drift = ((trend_seed % 21) - 10) * 0.002 * i
         city_price  = int(base_price * factor * (1 + fluctuation + trend_drift))
         result.append(max(1, city_price))
-
     return result
 
 
@@ -408,7 +410,8 @@ def get_demand(price: int, change: float) -> str:
 def fetch_datagov_prices(state: str = None, limit: int = 100) -> list:
     """
     Fetch live mandi prices from data.gov.in AGMARKNET API.
-    Returns list of dicts: {crop, price, change, history, unit, source}
+    Note: change and history are synthetically generated from a seed
+    since the API only provides point-in-time modal prices.
     Falls back to [] immediately if key missing or API unreachable.
     """
     if not DATAGOV_API_KEY:
@@ -427,7 +430,7 @@ def fetch_datagov_prices(state: str = None, limit: int = 100) -> list:
         resp = requests.get(
             f"{DATAGOV_BASE_URL}/{DATAGOV_RESOURCE_ID}",
             params=params,
-            timeout=2,   # hard 2s timeout — MSP fallback kicks in instantly if slow
+            timeout=2,
         )
         if resp.status_code != 200:
             print(f"[Market] DataGov API error: {resp.status_code} — using MSP fallback")
@@ -460,6 +463,7 @@ def fetch_datagov_prices(state: str = None, limit: int = 100) -> list:
                 continue
             avg_price = int(sum(prices) / len(prices))
             seed      = sum(ord(c) for c in commodity)
+            # Synthetic change/history (API gives point-in-time prices only)
             change    = round(((seed % 21) - 10) * 0.4, 2)
             history   = []
             for i in range(8):
@@ -482,13 +486,8 @@ def fetch_datagov_prices(state: str = None, limit: int = 100) -> list:
 
 
 def merge_with_fallback(live_crops: list) -> list:
-    """
-    Merge live DataGov crops with MSP fallback.
-    Live data takes precedence; fallback fills gaps.
-    """
     live_names = {c["crop"].lower() for c in live_crops}
     combined   = list(live_crops)
-
     for fb in MSP_FALLBACK:
         if fb["crop"].lower() not in live_names:
             combined.append({
@@ -510,14 +509,12 @@ def get_market_data():
     if location:
         cities = [c for c in cities if location in c.lower()]
 
-    # Try DataGov with hard 2s timeout. If slow/down, use MSP fallback instantly.
-    live_crops = fetch_datagov_prices(state=None, limit=200)
+    live_crops     = fetch_datagov_prices(state=None, limit=200)
     print(f"[Market] Live crops fetched: {len(live_crops)}")
 
     all_base_crops = merge_with_fallback(live_crops)
     print(f"[Market] Total commodities after merge: {len(all_base_crops)}")
 
-    # ── Step 3: Spread to cities with deterministic offsets ──────────────────
     markets = {}
     for city in cities:
         city_crops = []
@@ -534,7 +531,6 @@ def get_market_data():
                 "demand":  get_demand(city_price, city_change),
                 "source":  crop.get("source", "msp_fallback"),
             })
-        # Sort by demand descending, then price descending
         city_crops.sort(key=lambda x: (
             {"Very High": 3, "High": 2, "Medium": 1, "Low": 0}.get(x["demand"], 0),
             x["price"]
@@ -553,9 +549,13 @@ def get_market_data():
     })
 
 
+# ─── Debug endpoint — disabled in production ──────────────────────────────────
 @app.route('/api/debug-datagov')
 def debug_datagov():
-    """Debug endpoint to inspect raw DataGov API response."""
+    """Debug endpoint to inspect raw DataGov API response. Production-gated."""
+    if not DEBUG_MODE:
+        return jsonify({"error": "Not available in production"}), 403
+
     params = {
         "api-key": DATAGOV_API_KEY,
         "format":  "json",
@@ -568,16 +568,37 @@ def debug_datagov():
             timeout=10
         )
         return jsonify({
-            "status":    resp.status_code,
-            "response":  resp.json() if resp.ok else resp.text[:500],
+            "status":   resp.status_code,
+            "response": resp.json() if resp.ok else resp.text[:500],
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 # ─── Kisan Helper Chatbot ─────────────────────────────────────────────────────
+# Basic in-memory rate limit: tracks requests per IP per minute
+_chat_rate = {}   # { ip: [timestamp, ...] }
+CHAT_LIMIT  = 20  # max requests per IP per minute
+
+def _is_rate_limited(ip: str) -> bool:
+    now    = datetime.now().timestamp()
+    window = 60  # seconds
+    times  = _chat_rate.get(ip, [])
+    # Drop timestamps older than window
+    times  = [t for t in times if now - t < window]
+    _chat_rate[ip] = times
+    if len(times) >= CHAT_LIMIT:
+        return True
+    _chat_rate[ip].append(now)
+    return False
+
+
 @app.route("/api/chat", methods=["POST"])
 def kisan_chat():
+    ip = request.remote_addr or "unknown"
+    if _is_rate_limited(ip):
+        return jsonify({"error": "Too many requests. Please wait a moment."}), 429
+
     data     = request.json or {}
     messages = data.get("messages", [])
     lang     = data.get("lang", "en")
@@ -628,15 +649,29 @@ Always be warm and address the farmer respectfully. Never use markdown headers. 
 
 
 # ─── Diagnose Crop via Groq Vision API ───────────────────────────────────────
+MAX_IMAGE_B64_LEN = 2 * 1024 * 1024  # ~1.5 MB decoded — hard cap before sending to Groq
+
+_diagnose_rate = {}  # same structure as _chat_rate
+DIAGNOSE_LIMIT  = 10  # stricter — vision models cost more
+
+
 @app.route("/api/diagnose", methods=["POST"])
 def diagnose_crop():
     if not GROQ_API_KEY:
         return jsonify({"error": "GROQ_API_KEY not set in .env"}), 500
 
+    ip = request.remote_addr or "unknown"
+    if _is_rate_limited_diagnose(ip):
+        return jsonify({"error": "Too many requests. Please wait a moment."}), 429
+
     data      = request.json or {}
     image_b64 = data.get("image", "")
     if not image_b64:
         return jsonify({"error": "No image data received"}), 400
+
+    # Validate image size before forwarding to Groq
+    if len(image_b64) > MAX_IMAGE_B64_LEN:
+        return jsonify({"error": "Image too large. Please use an image under 1 MB."}), 413
 
     prompt = """You are an expert agricultural plant pathologist AI.
 Look very carefully at this crop image. Identify the EXACT disease, pest damage, or nutrient deficiency you can see.
@@ -732,6 +767,18 @@ Respond ONLY with valid JSON, absolutely no markdown or backticks:
     return jsonify({"error": "All vision models failed. Check your GROQ_API_KEY in .env"}), 500
 
 
+def _is_rate_limited_diagnose(ip: str) -> bool:
+    now    = datetime.now().timestamp()
+    window = 60
+    times  = _diagnose_rate.get(ip, [])
+    times  = [t for t in times if now - t < window]
+    _diagnose_rate[ip] = times
+    if len(times) >= DIAGNOSE_LIMIT:
+        return True
+    _diagnose_rate[ip].append(now)
+    return False
+
+
 # ─── Alerts ───────────────────────────────────────────────────────────────────
 @app.route("/api/alerts", methods=["POST"])
 def get_alerts():
@@ -761,131 +808,63 @@ def get_alerts():
         alerts.append({"type":"warning","category":"Pest","icon":"🕷️","title":"Spider Mite Alert","message":"Hot dry conditions favour rapid spider mite population growth.","action":"Apply Abamectin 1.8 EC (0.5 ml/L). Increase soil moisture."})
 
     harmful = []
-    if temp > 38:                        harmful.append("Wheat (grain shriveling risk)")
-    if humidity > 85 and rain > 20:      harmful.append("Cotton (boll rot risk)")
-    if temp < 10:                        harmful.append("Rice (cold injury risk)")
+    if temp > 38:                   harmful.append("Wheat (grain shriveling risk)")
+    if humidity > 85 and rain > 20: harmful.append("Cotton (boll rot risk)")
+    if temp < 10:                   harmful.append("Rice (cold injury risk)")
     if harmful:
         alerts.append({"type":"info","category":"Crop Advisory","icon":"🌾","title":"Crops at Risk in Current Conditions","message":f"Avoid growing: {', '.join(harmful)}","action":"Consider alternate crops better suited to current climate."})
 
     return jsonify({"alerts": alerts, "total": len(alerts)})
 
-# ─── ADD THIS ENDPOINT TO YOUR app.py ────────────────────────────────────────
-# Place it after the /api/alerts route and before if __name__ == "__main__"
-# It translates all crop names and UI labels for the market page via Groq LLM.
-# Results are returned as JSON and cached on the frontend.
 
-# In-memory translation cache: { "lang_code": { "crop_name": "translated" } }
-# ─── ADD THIS ENDPOINT TO YOUR app.py ────────────────────────────────────────
-# Place it after the /api/alerts route and before if __name__ == "__main__"
-# It translates all crop names and UI labels for the market page via Groq LLM.
-# Results are returned as JSON and cached on the frontend.
-
-# In-memory translation cache: { "lang_code": { "crop_name": "translated" } }
-_translation_cache = {}
-
+# ─── Market Translation ───────────────────────────────────────────────────────
 @app.route("/api/translate-market", methods=["POST"])
 def translate_market():
-    """
-    Translate all crop names and market UI labels into the requested language.
-    Uses Groq LLaMA for translation. Results cached per language in memory.
-    """
     data = request.json or {}
     lang = data.get("lang", "en").strip().lower()
-    
-    # English needs no translation
+
     if lang == "en":
         return jsonify({"lang": "en", "translations": {}, "cached": False})
-    
-    # Return cached result if available
+
     if lang in _translation_cache:
         return jsonify({"lang": lang, "translations": _translation_cache[lang], "cached": True})
-    
-    # Full list of all terms to translate
+
     terms_to_translate = {
-        # Crop names — cover all crops in MSP_FALLBACK + COMMODITY_DISPLAY
-        "Wheat": "Wheat",
-        "Rice": "Rice",
-        "Paddy (Rice)": "Paddy (Rice)",
-        "Maize (Corn)": "Maize (Corn)",
-        "Mustard": "Mustard",
-        "Groundnut": "Groundnut",
-        "Onion": "Onion",
-        "Potato": "Potato",
-        "Tomato": "Tomato",
-        "Chilli": "Chilli",
-        "Sugarcane": "Sugarcane",
-        "Arhar (Tur)": "Arhar (Tur)",
-        "Moong": "Moong",
-        "Urad": "Urad",
-        "Soybean": "Soybean",
-        "Cotton": "Cotton",
-        "Jowar (Sorghum)": "Jowar (Sorghum)",
-        "Bajra (Pearl Millet)": "Bajra (Pearl Millet)",
-        "Bengal Gram (Chana)": "Bengal Gram (Chana)",
-        "Garlic": "Garlic",
-        "Ginger": "Ginger",
-        "Turmeric": "Turmeric",
-        "Cumin (Jeera)": "Cumin (Jeera)",
-        "Coriander": "Coriander",
-        "Sunflower": "Sunflower",
-        "Sesame (Til)": "Sesame (Til)",
-        "Linseed": "Linseed",
-        "Castor Seed": "Castor Seed",
-        "Banana": "Banana",
-        "Mango": "Mango",
-        "Apple": "Apple",
-        "Grapes": "Grapes",
-        "Pomegranate": "Pomegranate",
-        "Cabbage": "Cabbage",
-        "Cauliflower": "Cauliflower",
-        "Brinjal (Eggplant)": "Brinjal (Eggplant)",
-        "Ladyfinger (Okra)": "Ladyfinger (Okra)",
-        "Spinach": "Spinach",
-        "Bitter Gourd": "Bitter Gourd",
-        "Bottle Gourd": "Bottle Gourd",
-        "Ridge Gourd": "Ridge Gourd",
-        "Ash Gourd": "Ash Gourd",
-        # Demand labels
-        "Very High": "Very High",
-        "High": "High",
-        "Medium": "Medium",
-        "Low": "Low",
-        # UI labels
-        "Price Rising": "Price Rising",
-        "Price Falling": "Price Falling",
-        "Very High Demand": "Very High Demand",
-        "All": "All",
-        "Crop": "Crop",
-        "Price": "Price",
-        "Change": "Change",
-        "Demand": "Demand",
-        "crops": "crops",
-        "Trend": "Trend",
-        "Comparison": "Comparison",
-        "Demand Map": "Demand Map",
-        "Search": "Search",
-        "30-Day Price Trend": "30-Day Price Trend",
-        "Current Prices": "Current Prices",
-        "Demand Intensity": "Demand Intensity",
-        "Price Momentum": "Price Momentum",
-        "Showing all major Indian markets": "Showing all major Indian markets",
-        "quintal": "quintal",
-        "Searching": "Searching",
-        "Loading markets": "Loading markets",
+        "Wheat":"Wheat","Rice":"Rice","Paddy (Rice)":"Paddy (Rice)",
+        "Maize (Corn)":"Maize (Corn)","Mustard":"Mustard","Groundnut":"Groundnut",
+        "Onion":"Onion","Potato":"Potato","Tomato":"Tomato","Chilli":"Chilli",
+        "Sugarcane":"Sugarcane","Arhar (Tur)":"Arhar (Tur)","Moong":"Moong",
+        "Urad":"Urad","Soybean":"Soybean","Cotton":"Cotton",
+        "Jowar (Sorghum)":"Jowar (Sorghum)","Bajra (Pearl Millet)":"Bajra (Pearl Millet)",
+        "Bengal Gram (Chana)":"Bengal Gram (Chana)","Garlic":"Garlic","Ginger":"Ginger",
+        "Turmeric":"Turmeric","Cumin (Jeera)":"Cumin (Jeera)","Coriander":"Coriander",
+        "Sunflower":"Sunflower","Sesame (Til)":"Sesame (Til)","Linseed":"Linseed",
+        "Castor Seed":"Castor Seed","Banana":"Banana","Mango":"Mango","Apple":"Apple",
+        "Grapes":"Grapes","Pomegranate":"Pomegranate","Cabbage":"Cabbage",
+        "Cauliflower":"Cauliflower","Brinjal (Eggplant)":"Brinjal (Eggplant)",
+        "Ladyfinger (Okra)":"Ladyfinger (Okra)","Spinach":"Spinach",
+        "Bitter Gourd":"Bitter Gourd","Bottle Gourd":"Bottle Gourd",
+        "Ridge Gourd":"Ridge Gourd","Ash Gourd":"Ash Gourd",
+        "Very High":"Very High","High":"High","Medium":"Medium","Low":"Low",
+        "Price Rising":"Price Rising","Price Falling":"Price Falling",
+        "Very High Demand":"Very High Demand","All":"All","Crop":"Crop",
+        "Price":"Price","Change":"Change","Demand":"Demand","crops":"crops",
+        "Trend":"Trend","Comparison":"Comparison","Demand Map":"Demand Map",
+        "Search":"Search","30-Day Price Trend":"30-Day Price Trend",
+        "Current Prices":"Current Prices","Demand Intensity":"Demand Intensity",
+        "Price Momentum":"Price Momentum",
+        "Showing all major Indian markets":"Showing all major Indian markets",
+        "quintal":"quintal","Searching":"Searching","Loading markets":"Loading markets",
     }
 
     lang_names = {
-        "hi":   "Hindi",        "bn":   "Bengali",      "te":   "Telugu",
-        "mr":   "Marathi",      "ta":   "Tamil",         "gu":   "Gujarati",
-        "kn":   "Kannada",      "ml":   "Malayalam",     "pa":   "Punjabi",
-        "or":   "Odia",         "as":   "Assamese",      "ur":   "Urdu",
-        "mai":  "Maithili",     "sat":  "Santali",       "ks":   "Kashmiri",
-        "ne":   "Nepali",       "sd":   "Sindhi",        "kok":  "Konkani",
-        "mni":  "Manipuri",     "bodo": "Bodo",          "doi":  "Dogri",
-        "sa":   "Sanskrit",
+        "hi":"Hindi","bn":"Bengali","te":"Telugu","mr":"Marathi","ta":"Tamil",
+        "gu":"Gujarati","kn":"Kannada","ml":"Malayalam","pa":"Punjabi","or":"Odia",
+        "as":"Assamese","ur":"Urdu","mai":"Maithili","sat":"Santali","ks":"Kashmiri",
+        "ne":"Nepali","sd":"Sindhi","kok":"Konkani","mni":"Manipuri","bodo":"Bodo",
+        "doi":"Dogri","sa":"Sanskrit",
     }
-    lang_name = lang_names.get(lang, "Hindi")
-
+    lang_name  = lang_names.get(lang, "Hindi")
     terms_list = list(terms_to_translate.keys())
     terms_json = json.dumps(terms_list, ensure_ascii=False)
 
@@ -931,22 +910,19 @@ Return format:
             print(f"[Translate] Groq error: {resp.status_code} — {resp.text[:200]}")
             return jsonify({"error": "Translation service unavailable", "translations": {}}), 500
 
-        raw  = resp.json()["choices"][0]["message"]["content"].strip()
-        # Strip markdown fences if any
+        raw   = resp.json()["choices"][0]["message"]["content"].strip()
         clean = re.sub(r"```(?:json)?", "", raw).replace("```", "").strip()
-        # Extract JSON object
         match = re.search(r"\{.*\}", clean, re.DOTALL)
         if not match:
             return jsonify({"error": "Invalid translation response", "translations": {}}), 500
 
         translations = json.loads(match.group())
 
-        # Validate — ensure all terms present, fallback to English if missing
+        # Fill any missing keys with English fallback
         for term in terms_list:
             if term not in translations or not translations[term]:
                 translations[term] = term
 
-        # Cache it
         _translation_cache[lang] = translations
         print(f"[Translate] ✅ Translated {len(translations)} terms to {lang_name}")
 
@@ -967,9 +943,12 @@ Return format:
 
 @app.route("/api/translate-market/clear", methods=["POST"])
 def clear_translation_cache():
-    """Clear the server-side translation cache (for development)."""
+    """Clear the server-side translation cache (dev use only)."""
+    if not DEBUG_MODE:
+        return jsonify({"error": "Not available in production"}), 403
     _translation_cache.clear()
     return jsonify({"status": "cache cleared"})
 
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=7860)
+    app.run(host="0.0.0.0", port=7860, debug=DEBUG_MODE)
