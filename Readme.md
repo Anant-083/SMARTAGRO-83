@@ -1,3 +1,12 @@
+---
+title: Smartagro
+emoji: 🌱
+colorFrom: green
+colorTo: lime
+sdk: docker
+app_port: 7860
+pinned: false
+---
 # 🌿 SmartAgro — AI-Powered Precision Agriculture Platform 
 
 <div align="center"> 
