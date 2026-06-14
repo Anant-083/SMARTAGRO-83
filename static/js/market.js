@@ -3,70 +3,76 @@
    ✓ Data from /api/market (DataGov AGMARKNET + MSP fallback)
    ✓ Real 8-point price history → interpolated 30-day trend
    ✓ Zero Math.random — deterministic everywhere
-   ✓ Full translation for crop names & UI labels
+   ✓ Translation via /api/translate-market (keyed by English name)
    ✓ Line/Bar/Radar charts with real change data
    ✓ Search, filter chips, price table, ticker
    ✓ Mobile-friendly rendering
 ═══════════════════════════════════════════════ */
 
 /* ── State ──────────────────────────────────── */
-let allMarketData = {}; // { city: [{crop,price,change,history,demand,unit},...] }
-let allLocations = [];
-let marketChart = null;
+let allMarketData  = {};
+let allLocations   = [];
+let marketChart    = null;
 let activeChartType = 'line';
-let activeFilter = 'all';
+let activeFilter   = 'all';
 let currentChartCity = 'Delhi';
 
 /* ══════════════════════════════════════════════
-   TRANSLATION HELPERS
+   TRANSLATION SYSTEM
+   Backend returns: { "Wheat": "गेहूं", "Rice": "चावल", ... }
+   We store that flat object and look up by English key directly.
 ══════════════════════════════════════════════ */
+let _translations = {};
+
+function setTranslations(data) {
+    _translations = data || {};
+}
+
+/**
+ * Translate any key — crop name, demand label, or UI string.
+ * Falls back to the original key if no translation found.
+ */
 function _t(key) {
-    if (typeof t === 'function') {
-        const v = t(key);
-        if (v && v !== key) return v;
-    }
-    return key;
+    if (!key) return '';
+    return _translations[key] || key;
 }
 
-const CROP_TRANSLATION_KEYS = {
-    'Maize (Corn)': 'crop_corn',
-    'Soybean': 'crop_soybean',
-    'Cotton': 'crop_cotton',
-    'Coffee': 'crop_coffee',
-    'Cocoa': 'crop_cocoa',
-    'Wheat': 'crop_wheat',
-    'Rice': 'crop_rice',
-    'Paddy (Rice)': 'crop_rice',
-    'Mustard': 'crop_mustard',
-    'Groundnut': 'crop_groundnut',
-    'Onion': 'crop_onion',
-    'Potato': 'crop_potato',
-    'Tomato': 'crop_tomato',
-    'Chilli': 'crop_chilli',
-    'Sugarcane': 'crop_sugarcane',
-    'Arhar (Tur)': 'crop_arhar',
-    'Moong': 'crop_moong',
-    'Urad': 'crop_urad',
-};
-
+/** Translate a crop name */
 function tCrop(name) {
-    const key = CROP_TRANSLATION_KEYS[name];
-    if (!key) return name;
-    return _t(key) !== key ? _t(key) : name;
+    return _translations[name] || name;
 }
 
-const DEMAND_KEYS = {
-    'Very High': 'demand_very_high',
-    'High': 'demand_high',
-    'Medium': 'demand_medium',
-    'Low': 'demand_low',
-};
-
+/** Translate a demand label */
 function tDemand(demand) {
-    const key = DEMAND_KEYS[demand];
-    if (!key) return demand;
-    const v = _t(key);
-    return (v && v !== key) ? v : demand;
+    return _translations[demand] || demand;
+}
+
+/* ══════════════════════════════════════════════
+   LANGUAGE LOADING
+   Call this whenever the user switches language.
+   Pass the lang code e.g. 'hi', 'bn', 'te', 'en'
+══════════════════════════════════════════════ */
+async function loadTranslations(lang) {
+    if (!lang || lang === 'en') {
+        setTranslations({});
+        reRenderMarket();
+        return;
+    }
+    try {
+        const res = await fetch('/api/translate-market', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ lang }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setTranslations(data.translations || {});
+        console.log(`[Market] Translations loaded for ${data.lang_name || lang}: ${Object.keys(_translations).length} terms`);
+    } catch (err) {
+        console.warn('[Market] Translation load failed, using English:', err);
+        setTranslations({});
+    }
+    reRenderMarket();
 }
 
 /* ══════════════════════════════════════════════
@@ -86,14 +92,18 @@ async function loadAllMarkets() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
-        allMarketData = data.markets || {};
-        allLocations = data.locations || Object.keys(allMarketData);
+        allMarketData = data.markets   || {};
+        allLocations  = data.locations || Object.keys(allMarketData);
 
-        if (Object.keys(allMarketData).length === 0) throw new Error('Empty market data');
+        if (Object.keys(allMarketData).length === 0)
+            throw new Error('Empty market data');
 
-        const liveCount = data.live_count || 0;
+        const liveCount   = data.live_count   || 0;
         const staticCount = data.static_count || 0;
-        console.log(`[Market] Live: ${liveCount} crops | MSP fallback: ${staticCount} crops`);
+        console.log(`[Market] Live: ${liveCount} | MSP fallback: ${staticCount}`);
+
+        // Show data source badge
+        updateDataSourceBadge(liveCount, staticCount);
 
         hideLoading();
         populateCityDropdown();
@@ -121,11 +131,27 @@ async function loadAllMarkets() {
     }
 }
 
+/**
+ * Show a small badge telling the user whether prices are
+ * live from AGMARKNET or from MSP reference data.
+ */
+function updateDataSourceBadge(liveCount, staticCount) {
+    const badge = document.getElementById('dataSourceBadge');
+    if (!badge) return;
+    if (liveCount > 0) {
+        badge.innerHTML = `<i class="fas fa-circle" style="color:#4ade80;font-size:0.5rem"></i> ${liveCount} live prices + ${staticCount} MSP reference`;
+        badge.style.color = '#4ade80';
+    } else {
+        badge.innerHTML = `<i class="fas fa-circle" style="color:#fbbf24;font-size:0.5rem"></i> MSP reference prices (live data unavailable)`;
+        badge.style.color = '#fbbf24';
+    }
+}
+
 function hideLoading() {
     const loader = document.getElementById('marketLoading');
-    const grid = document.getElementById('marketCitiesGrid');
+    const grid   = document.getElementById('marketCitiesGrid');
     if (loader) loader.style.display = 'none';
-    if (grid) grid.style.display = '';
+    if (grid)   grid.style.display   = '';
 }
 
 /* ══════════════════════════════════════════════
@@ -134,9 +160,9 @@ function hideLoading() {
 function populateCityDropdown() {
     const sel = document.getElementById('chartCitySelect');
     if (!sel) return;
-    sel.innerHTML = allLocations.map(city =>
-        `<option value="${city}">${city}</option>`
-    ).join('');
+    sel.innerHTML = allLocations
+        .map(city => `<option value="${city}">${city}</option>`)
+        .join('');
 }
 
 /* ══════════════════════════════════════════════
@@ -156,27 +182,27 @@ function renderMarketGrid(markets) {
     if (none) none.style.display = 'none';
     grid.style.display = '';
 
-    const cropLabel = _t('th_crop') || 'Crop';
-    const priceLabel = _t('lbl_price') || 'Price';
-    const changeLabel = _t('lbl_change') || 'Change';
-    const demandLabel = _t('lbl_demand') || 'Demand';
-    const cropsLabel = _t('lbl_crops') || 'crops';
+    const cropLabel   = _t('Crop')   || 'Crop';
+    const priceLabel  = _t('Price')  || 'Price';
+    const changeLabel = _t('Change') || 'Change';
+    const demandLabel = _t('Demand') || 'Demand';
+    const cropsLabel  = _t('crops')  || 'crops';
 
     let hasVisible = false;
 
     grid.innerHTML = entries.map(([city, crops], cityIdx) => {
-                let filtered = crops;
-                if (activeFilter === 'Very High') {
-                    filtered = crops.filter(c => c.demand === 'Very High');
-                } else if (activeFilter === 'rising') {
-                    filtered = crops.filter(c => c.change > 0);
-                } else if (activeFilter === 'falling') {
-                    filtered = crops.filter(c => c.change < 0);
-                }
-                if (filtered.length === 0) return '';
-                hasVisible = true;
+        let filtered = crops;
+        if (activeFilter === 'Very High') {
+            filtered = crops.filter(c => c.demand === 'Very High');
+        } else if (activeFilter === 'rising') {
+            filtered = crops.filter(c => c.change > 0);
+        } else if (activeFilter === 'falling') {
+            filtered = crops.filter(c => c.change < 0);
+        }
+        if (filtered.length === 0) return '';
+        hasVisible = true;
 
-                return `
+        return `
         <div class="city-card" style="animation-delay:${cityIdx * 0.05}s">
             <div class="city-card-header">
                 <div class="city-name">
@@ -199,7 +225,7 @@ function renderMarketGrid(markets) {
                         <div class="cr-name">${tCrop(crop.crop)}</div>
                         <div>
                             <div class="cr-price">₹${crop.price.toLocaleString('en-IN')}</div>
-                            <div class="cr-unit">${crop.unit}</div>
+                            <div class="cr-unit">${_t('quintal') || crop.unit}</div>
                         </div>
                         <div class="cr-change ${isUp ? 'up' : 'down'}">
                             <i class="fas fa-arrow-${isUp ? 'up' : 'down'}"></i>
@@ -225,7 +251,12 @@ function renderMarketGrid(markets) {
 }
 
 function getDemandClass(demand) {
-    const map = { 'Very High': 'very-high', 'High': 'high', 'Medium': 'medium', 'Low': 'low' };
+    const map = {
+        'Very High': 'very-high',
+        'High':      'high',
+        'Medium':    'medium',
+        'Low':       'low',
+    };
     return map[demand] || 'medium';
 }
 
@@ -248,10 +279,10 @@ async function searchLocation() {
         <div style="grid-column:1/-1;text-align:center;padding:60px 0;">
             <div class="loading-spinner"></div>
             <p style="color:var(--text-2);margin-top:12px;font-size:0.9rem">
-                ${_t('lbl_searching') || 'Searching'} <strong style="color:var(--green)">"${query}"</strong>…
+                ${_t('Searching') || 'Searching'} <strong style="color:var(--green)">"${query}"</strong>…
             </p>
         </div>`;
-    if (subtitle) subtitle.textContent = `${_t('lbl_searching') || 'Searching'} "${query}"…`;
+    if (subtitle) subtitle.textContent = `${_t('Searching') || 'Searching'} "${query}"…`;
 
     const q       = query.toLowerCase();
     const matched = Object.fromEntries(
@@ -264,12 +295,13 @@ async function searchLocation() {
         const firstCity = Object.keys(matched)[0];
         currentChartCity = firstCity;
         buildChart(matched, firstCity, activeChartType);
-        if (subtitle) subtitle.textContent = `${_t('market_data_sub') || 'Showing results for'} "${query}"`;
+        if (subtitle) subtitle.textContent = `${_t('Search') || 'Results'}: "${query}"`;
         if (typeof showToast === 'function')
             showToast(`📍 ${Object.keys(matched).length} market(s) found for "${query}"`, 'success');
         return;
     }
 
+    // City not in local cache — try API
     try {
         const res  = await fetch(`/api/market?location=${encodeURIComponent(query)}`);
         const data = await res.json();
@@ -284,7 +316,7 @@ async function searchLocation() {
             const firstCity = data.locations[0];
             currentChartCity = firstCity;
             buildChart(data.markets, firstCity, activeChartType);
-            if (subtitle) subtitle.textContent = `Showing: "${query}"`;
+            if (subtitle) subtitle.textContent = `${_t('Search') || 'Showing'}: "${query}"`;
             if (typeof showToast === 'function')
                 showToast(`📍 Showing ${firstCity} market data`, 'success');
         }
@@ -304,14 +336,14 @@ function clearSearch() {
 
     if (input)    input.value            = '';
     if (clearBtn) clearBtn.style.display = 'none';
-    if (subtitle) subtitle.textContent   = _t('market_data_sub') || 'Showing all major Indian markets';
+    if (subtitle) subtitle.textContent   = _t('Showing all major Indian markets') || 'Showing all major Indian markets';
     if (none)     none.style.display     = 'none';
 
     if (grid) grid.innerHTML = `
         <div style="grid-column:1/-1;text-align:center;padding:60px 0;">
             <div class="loading-spinner"></div>
             <p style="color:var(--text-2);margin-top:12px;font-size:0.9rem">
-                ${_t('loading_market') || 'Loading markets…'}
+                ${_t('Loading markets') || 'Loading markets…'}
             </p>
         </div>`;
 
@@ -323,7 +355,9 @@ function clearSearch() {
 function setupSearchEnterKey() {
     const input = document.getElementById('locationSearch');
     if (!input) return;
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') searchLocation(); });
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') searchLocation();
+    });
     input.addEventListener('input', () => {
         const clearBtn = document.getElementById('clearSearchBtn');
         if (clearBtn) clearBtn.style.display = input.value ? 'flex' : 'none';
@@ -396,16 +430,16 @@ function buildChart(markets, city, type) {
     const cityData = markets[city] || Object.values(markets)[0] || [];
     if (marketChart) { marketChart.destroy(); marketChart = null; }
 
-    if (type === 'line')        buildLineChart(canvas, cityData, city);
-    else if (type === 'bar')    buildBarChart(canvas, cityData, city);
-    else if (type === 'radar')  buildRadarChart(canvas, cityData, city);
+    if (type === 'line')       buildLineChart(canvas, cityData, city);
+    else if (type === 'bar')   buildBarChart(canvas, cityData, city);
+    else if (type === 'radar') buildRadarChart(canvas, cityData, city);
 }
 
 /* ══════════════════════════════════════════════
    HISTORY INTERPOLATION
    Each crop has an 8-point bi-weekly history.
-   We interpolate those 8 anchor points to 30
-   daily labels for a smooth trend line.
+   We interpolate to 30 daily labels for a smooth
+   trend line.
 ══════════════════════════════════════════════ */
 function interpolateHistory(history, targetLen) {
     if (!history || history.length === 0) return new Array(targetLen).fill(0);
@@ -425,8 +459,7 @@ function interpolateHistory(history, targetLen) {
 }
 
 /* ──────────────────────────────────────────────
-   LINE CHART — real 8-point history interpolated
-   to 30 daily labels. Shows top 8 by demand.
+   LINE CHART
 ────────────────────────────────────────────── */
 function buildLineChart(canvas, cityData, city) {
     const labels = [];
@@ -466,7 +499,7 @@ function buildLineChart(canvas, cityData, city) {
             pointRadius:               0,
             pointHoverRadius:          5,
             pointHoverBackgroundColor: color,
-            hidden:                    idx >= 8,   // show top 8 by default
+            hidden:                    idx >= 8,
         };
     });
 
@@ -475,7 +508,7 @@ function buildLineChart(canvas, cityData, city) {
         data: { labels, datasets },
         options: {
             ...getBaseChartOptions(
-                `${city} — ${_t('chart_sub') || '30-Day Price Trend'} (₹/${_t('lbl_quintal') || 'quintal'})`
+                `${city} — ${_t('30-Day Price Trend')} (₹/${_t('quintal') || 'quintal'})`
             ),
             scales: {
                 x: {
@@ -486,7 +519,7 @@ function buildLineChart(canvas, cityData, city) {
                 y: {
                     grid:   { color: 'rgba(74,222,128,0.06)', drawBorder: false },
                     ticks:  {
-                        color: '#6b8c6c',
+                        color:    '#6b8c6c',
                         callback: v => '₹' + v.toLocaleString('en-IN'),
                     },
                     border: { color: 'rgba(74,222,128,0.1)' },
@@ -497,8 +530,7 @@ function buildLineChart(canvas, cityData, city) {
 }
 
 /* ──────────────────────────────────────────────
-   BAR CHART — current prices, all crops,
-   colour-coded by change direction.
+   BAR CHART
 ────────────────────────────────────────────── */
 function buildBarChart(canvas, cityData, city) {
     const colors = cityData.map(c =>
@@ -516,7 +548,7 @@ function buildBarChart(canvas, cityData, city) {
         data: {
             labels:   cityData.map(c => tCrop(c.crop)),
             datasets: [{
-                label:           `${_t('lbl_price') || 'Price'} (₹/${_t('lbl_quintal') || 'quintal'})`,
+                label:           `${_t('Price') || 'Price'} (₹/${_t('quintal') || 'quintal'})`,
                 data:            cityData.map(c => c.price),
                 backgroundColor: colors,
                 borderColor:     borderColors,
@@ -527,7 +559,7 @@ function buildBarChart(canvas, cityData, city) {
         },
         options: {
             ...getBaseChartOptions(
-                `${city} — ${_t('tab_comparison') || 'Current Prices'} (₹/${_t('lbl_quintal') || 'quintal'})`
+                `${city} — ${_t('Current Prices')} (₹/${_t('quintal') || 'quintal'})`
             ),
             scales: {
                 x: {
@@ -536,7 +568,7 @@ function buildBarChart(canvas, cityData, city) {
                         color:       '#a7c4a8',
                         font:        { size: 9 },
                         maxRotation: 50,
-                        callback: function(val, idx) {
+                        callback: function(val) {
                             const label = this.getLabelForValue(val);
                             return label.length > 12 ? label.slice(0, 11) + '…' : label;
                         },
@@ -545,7 +577,10 @@ function buildBarChart(canvas, cityData, city) {
                 },
                 y: {
                     grid:   { color: 'rgba(74,222,128,0.06)' },
-                    ticks:  { color: '#6b8c6c', callback: v => '₹' + v.toLocaleString('en-IN') },
+                    ticks:  {
+                        color:    '#6b8c6c',
+                        callback: v => '₹' + v.toLocaleString('en-IN'),
+                    },
                     border: { color: 'rgba(74,222,128,0.1)' },
                 },
             },
@@ -563,8 +598,8 @@ function buildBarChart(canvas, cityData, city) {
                             const crop = cityData[ctx.dataIndex];
                             const sign = crop.change >= 0 ? '▲' : '▼';
                             return [
-                                ` ₹${ctx.raw.toLocaleString('en-IN')}/quintal`,
-                                ` ${sign} ${Math.abs(crop.change).toFixed(1)}%  |  ${crop.demand} demand`,
+                                ` ₹${ctx.raw.toLocaleString('en-IN')}/${_t('quintal') || 'quintal'}`,
+                                ` ${sign} ${Math.abs(crop.change).toFixed(1)}%  |  ${tDemand(crop.demand)} ${_t('Demand') || 'demand'}`,
                             ];
                         },
                     },
@@ -575,7 +610,7 @@ function buildBarChart(canvas, cityData, city) {
 }
 
 /* ──────────────────────────────────────────────
-   RADAR CHART — demand intensity + price momentum
+   RADAR CHART
 ────────────────────────────────────────────── */
 function buildRadarChart(canvas, cityData, city) {
     const demandScore = { 'Very High': 100, 'High': 75, 'Medium': 50, 'Low': 25 };
@@ -587,7 +622,7 @@ function buildRadarChart(canvas, cityData, city) {
             labels: display.map(c => tCrop(c.crop)),
             datasets: [
                 {
-                    label:                'Demand Intensity',
+                    label:                _t('Demand Intensity') || 'Demand Intensity',
                     data:                 display.map(c => demandScore[c.demand] || 50),
                     backgroundColor:      'rgba(251,191,36,0.12)',
                     borderColor:          'rgba(251,191,36,0.75)',
@@ -598,7 +633,7 @@ function buildRadarChart(canvas, cityData, city) {
                     pointRadius:          5,
                 },
                 {
-                    label:                'Price Momentum',
+                    label:                _t('Price Momentum') || 'Price Momentum',
                     data:                 display.map(c => Math.min(100, Math.max(0, (c.change + 10) * 5))),
                     backgroundColor:      'rgba(74,222,128,0.10)',
                     borderColor:          'rgba(74,222,128,0.65)',
@@ -634,7 +669,7 @@ function buildRadarChart(canvas, cityData, city) {
                 },
                 title: {
                     display: true,
-                    text:    `${city} — ${_t('tab_demand') || 'Demand Map'}`,
+                    text:    `${city} — ${_t('Demand Map') || 'Demand Map'}`,
                     color:   '#a7c4a8',
                     font:    { size: 13, weight: '600' },
                     padding: { bottom: 10 },
@@ -674,7 +709,7 @@ function getBaseChartOptions(titleText) {
                 },
             },
             title: {
-                display: true,
+                display: !!titleText,
                 text:    titleText,
                 color:   '#a7c4a8',
                 font:    { size: 13, weight: '600' },
@@ -703,9 +738,8 @@ function buildPriceTable(markets) {
     const tbody = document.getElementById('priceTableBody');
     if (!tbody) return;
 
-    const cities = Object.keys(markets);
-
-    const cropSet = new Set();
+    const cities   = Object.keys(markets);
+    const cropSet  = new Set();
     Object.values(markets).forEach(crops => crops.forEach(c => cropSet.add(c.crop)));
     const allCrops = Array.from(cropSet).sort();
 
@@ -748,13 +782,15 @@ function buildPriceTable(markets) {
     const thead = document.querySelector('.price-table thead tr');
     if (thead) {
         thead.innerHTML =
-            `<th>${_t('th_crop') || 'Crop'}</th>` +
+            `<th>${_t('Crop') || 'Crop'}</th>` +
             displayCities.map(c => `<th>${c}</th>`).join('');
     }
 }
 
 /* ══════════════════════════════════════════════
    RE-RENDER ON LANGUAGE CHANGE
+   Called by your global language switcher after
+   loadTranslations() completes.
 ══════════════════════════════════════════════ */
 function reRenderMarket() {
     if (Object.keys(allMarketData).length === 0) return;
@@ -762,7 +798,7 @@ function reRenderMarket() {
     const subtitle = document.getElementById('marketSubtitle');
     const search   = document.getElementById('locationSearch');
     if (subtitle && search && !search.value) {
-        subtitle.textContent = _t('market_data_sub') || 'Showing all major Indian markets';
+        subtitle.textContent = _t('Showing all major Indian markets') || 'Showing all major Indian markets';
     }
 
     renderMarketGrid(allMarketData);
@@ -771,8 +807,13 @@ function reRenderMarket() {
     buildChart(allMarketData, currentChartCity, activeChartType);
 }
 
+/* ──────────────────────────────────────────────
+   Patch into global reRenderDynamic hook so the
+   main language switcher triggers market re-render.
+────────────────────────────────────────────── */
 ;(function patchReRender() {
-    const prev = typeof window.reRenderDynamic === 'function' ? window.reRenderDynamic : null;
+    const prev = typeof window.reRenderDynamic === 'function'
+        ? window.reRenderDynamic : null;
     window.reRenderDynamic = function () {
         if (prev) prev();
         reRenderMarket();
