@@ -1,0 +1,278 @@
+/* ═══════════════════════════════════════════════
+   main.js — shared across all pages
+   Handles: navbar scroll, toast, hamburger,
+            location request, weather fetch
+═══════════════════════════════════════════════ */
+
+/* ── Navbar scroll effect ───────────────────── */
+const navbar = document.getElementById('navbar');
+window.addEventListener('scroll', () => {
+    if (window.scrollY > 40) {
+        navbar.classList.add('scrolled');
+    } else {
+        navbar.classList.remove('scrolled');
+    }
+}, { passive: true });
+
+/* ── Hamburger ──────────────────────────────── */
+const hamburger = document.getElementById('hamburger');
+const navLinks = document.getElementById('navLinks');
+if (hamburger && navLinks) {
+    hamburger.addEventListener('click', () => {
+        hamburger.classList.toggle('open');
+        navLinks.classList.toggle('open');
+    });
+    // Close on nav item click (mobile)
+    navLinks.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', () => {
+            hamburger.classList.remove('open');
+            navLinks.classList.remove('open');
+        });
+    });
+}
+
+/* ── Toast notification ─────────────────────── */
+let toastTimer = null;
+
+function showToast(msg, type = 'success', duration = 3500) {
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.className = `toast show ${type}`;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+        toast.classList.remove('show');
+    }, duration);
+}
+
+/* ── Shared weather state ───────────────────── */
+window.weatherData = null;
+
+/* ── Geolocation helper ─────────────────────── */
+function requestLocation(callback) {
+    const btn = document.getElementById('locationBtn') || document.getElementById('alertLocationBtn');
+    if (btn) {
+        btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> <span>Getting location...</span>`;
+        btn.disabled = true;
+    }
+
+    if (!navigator.geolocation) {
+        showToast('Geolocation is not supported by your browser.', 'error');
+        if (btn) {
+            btn.innerHTML = `<i class="fas fa-location-crosshairs"></i> <span>Get My Location</span>`;
+            btn.disabled = false;
+        }
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        position => {
+            const { latitude, longitude } = position.coords;
+            if (btn) {
+                btn.innerHTML = `<i class="fas fa-check"></i> <span>Location Found</span>`;
+                btn.style.background = 'linear-gradient(135deg, #166534, #22c55e)';
+            }
+            showToast('📍 Location detected successfully!', 'success');
+            if (typeof callback === 'function') callback(latitude, longitude);
+        },
+        err => {
+            console.error('Geolocation error:', err);
+            showToast('Location access denied. Using default location.', 'warning');
+            if (btn) {
+                btn.innerHTML = `<i class="fas fa-location-crosshairs"></i> <span>Get My Location</span>`;
+                btn.disabled = false;
+            }
+            // Fallback: use Delhi, India as default
+            if (typeof callback === 'function') callback(28.6139, 77.2090);
+            // To this:
+        }, {
+            timeout: 15000, // Gives the browser 15 seconds to find a position
+            enableHighAccuracy: false, // Desktop browsers fail high accuracy if they lack a GPS chip
+            maximumAge: 60000 // Allows utilizing a recently cached location asset
+        }
+    );
+}
+
+/* ── Fetch weather from backend ─────────────── */
+async function fetchWeather(lat, lon) {
+    try {
+        const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
+        if (!res.ok) throw new Error('Weather API error');
+        const data = await res.json();
+        window.weatherData = data;
+        return data;
+    } catch (err) {
+        console.error('fetchWeather error:', err);
+        showToast('Could not load weather data.', 'error');
+        return null;
+    }
+}
+
+/* ── Weather icon emoji map ─────────────────── */
+function getWeatherEmoji(iconCode) {
+    const map = {
+        '01d': '☀️',
+        '01n': '🌙',
+        '02d': '⛅',
+        '02n': '⛅',
+        '03d': '☁️',
+        '03n': '☁️',
+        '04d': '☁️',
+        '04n': '☁️',
+        '09d': '🌧️',
+        '09n': '🌧️',
+        '10d': '🌦️',
+        '10n': '🌧️',
+        '11d': '⛈️',
+        '11n': '⛈️',
+        '13d': '❄️',
+        '13n': '❄️',
+        '50d': '🌫️',
+        '50n': '🌫️',
+    };
+    return map[iconCode] || '🌤️';
+}
+
+/* ── Format day name ────────────────────────── */
+function getDayName(dateStr, short = true) {
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const shortDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const d = new Date(dateStr);
+    const today = new Date();
+    if (d.toDateString() === today.toDateString()) return 'Today';
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    if (d.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
+    return short ? shortDays[d.getDay()] : days[d.getDay()];
+}
+
+/* ── Capitalize ─────────────────────────────── */
+function capitalize(str) {
+    return str ? str.charAt(0).toUpperCase() + str.slice(1) : '';
+}
+
+/* ── Animate counter ────────────────────────── */
+function animateCounter(el, target, duration = 800, suffix = '') {
+    if (!el) return;
+    const start = 0;
+    const startTime = performance.now();
+
+    function update(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const current = Math.round(start + (target - start) * eased);
+        el.textContent = current + suffix;
+        if (progress < 1) requestAnimationFrame(update);
+    }
+    requestAnimationFrame(update);
+}
+
+/* ── Intersection Observer for animations ───── */
+function observeAnimations() {
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.style.animationPlayState = 'running';
+                observer.unobserve(entry.target);
+            }
+        });
+    }, { threshold: 0.1 });
+
+    document.querySelectorAll('.crop-card, .forecast-card, .timeline-item, .alert-card, .city-card').forEach(el => {
+        el.style.animationPlayState = 'paused';
+        observer.observe(el);
+    });
+}
+
+/* ── Ripple effect on buttons ───────────────── */
+document.addEventListener('click', e => {
+    const btn = e.target.closest('.btn-primary, .btn-secondary, .btn-analyze, .chart-tab, .alert-tab, .chip');
+    if (!btn) return;
+    const ripple = document.createElement('span');
+    const rect = btn.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height);
+    ripple.style.cssText = `
+    position:absolute; border-radius:50%;
+    width:${size}px; height:${size}px;
+    left:${e.clientX - rect.left - size/2}px;
+    top:${e.clientY - rect.top - size/2}px;
+    background:rgba(255,255,255,0.18);
+    transform:scale(0); animation:ripple 0.55s linear;
+    pointer-events:none;
+  `;
+    if (getComputedStyle(btn).position === 'static') btn.style.position = 'relative';
+    btn.style.overflow = 'hidden';
+    btn.appendChild(ripple);
+    setTimeout(() => ripple.remove(), 600);
+});
+
+// Ripple keyframe injection
+const styleTag = document.createElement('style');
+styleTag.textContent = `@keyframes ripple { to { transform: scale(2.5); opacity: 0; } }`;
+document.head.appendChild(styleTag);
+
+/* ── Update alert badge in navbar ───────────── */
+function updateAlertBadge(count) {
+    const badge = document.getElementById('alertBadge');
+    if (badge) {
+        badge.textContent = count;
+        badge.style.display = count > 0 ? 'inline-flex' : 'none';
+    }
+}
+
+/* ── On page load: restore badge from session ── */
+document.addEventListener('DOMContentLoaded', () => {
+    const saved = sessionStorage.getItem('alert_count');
+    if (saved) updateAlertBadge(parseInt(saved));
+    observeAnimations();
+
+    // ── Close lang dropdown on outside tap (mobile) ──
+    document.addEventListener('click', e => {
+        const sel = document.querySelector('.lang-selector');
+        if (sel && !sel.contains(e.target)) {
+            sel.classList.remove('open');
+        }
+    });
+    /* ── Day / Night Theme Toggle ───────────────────────── */
+    (function initTheme() {
+        const btn = document.getElementById('themeToggle');
+        const icon = document.getElementById('themeIcon');
+        const saved = localStorage.getItem('smartagro_theme');
+
+        function applyTheme(mode) {
+            if (mode === 'light') {
+                document.body.classList.add('light-theme');
+                if (icon) {
+                    icon.classList.remove('fa-moon');
+                    icon.classList.add('fa-sun');
+                }
+            } else {
+                document.body.classList.remove('light-theme');
+                if (icon) {
+                    icon.classList.remove('fa-sun');
+                    icon.classList.add('fa-moon');
+                }
+            }
+            localStorage.setItem('smartagro_theme', mode);
+        }
+
+        // Restore saved preference on load
+        applyTheme(saved === 'light' ? 'light' : 'dark');
+
+        if (btn) {
+            btn.addEventListener('click', () => {
+                const isLight = document.body.classList.contains('light-theme');
+                applyTheme(isLight ? 'dark' : 'light');
+            });
+        }
+    })();
+});
+/* ── PWA Service Worker Registration ───────── */
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/static/service-worker.js')
+            .then(reg => console.log('SmartAgro SW registered:', reg.scope))
+            .catch(err => console.error('SW registration failed:', err));
+    });
+}

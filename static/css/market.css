@@ -1,0 +1,325 @@
+/* ═══════════════════════════════════════
+   market.css
+═══════════════════════════════════════ */
+
+.market-hero { padding-bottom: 80px; background: linear-gradient(160deg, #050d06, #060e08, #0a1205); }
+.market-hero .orb-1 { background: radial-gradient(circle, var(--amber), transparent); }
+.market-hero .orb-2 { background: radial-gradient(circle, var(--green-2), transparent); }
+
+/* Price Ticker */
+.price-ticker {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 44px;
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  z-index: 2;
+}
+.ticker-label {
+  padding: 0 16px;
+  background: var(--green-2);
+  color: #000;
+  font-weight: 800;
+  font-size: 0.7rem;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  letter-spacing: 1px;
+}
+.ticker-track { flex: 1; overflow: hidden; height: 100%; display: flex; align-items: center; }
+.ticker-content {
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--text-2);
+  font-weight: 500;
+  animation: tickerScroll 1500s linear infinite;
+  padding-left: 100%;
+}
+@keyframes tickerScroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-100%); }
+}
+
+/* ── Search Section ─────────────────── */
+.search-bar-section {
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  padding: 24px 0;
+  position: sticky;
+  top: var(--nav-h);
+  z-index: 100;
+}
+.search-filter-bar { display: flex; flex-direction: column; gap: 14px; }
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  padding: 8px 16px;
+  transition: var(--trans);
+}
+.search-box:focus-within { border-color: var(--green); box-shadow: 0 0 0 3px rgba(74,222,128,0.1); }
+.search-box i { color: var(--text-3); font-size: 0.9rem; }
+.search-box input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+.search-box input::placeholder { color: var(--text-3); }
+.search-btn {
+  padding: 8px 18px;
+  background: var(--green-2);
+  color: #000;
+  font-weight: 700;
+  font-size: 0.82rem;
+  border-radius: var(--radius-sm);
+  transition: var(--trans);
+}
+.search-btn:hover { background: var(--green); transform: scale(1.02); }
+.clear-btn {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.75rem;
+  transition: var(--trans);
+}
+.clear-btn:hover { background: var(--red-2); color: #fff; border-color: transparent; }
+
+.filter-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  padding: 6px 14px;
+  border-radius: 50px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  background: var(--bg-3);
+  cursor: pointer;
+  transition: var(--trans);
+}
+.chip:hover, .chip.active { background: var(--green-glow); border-color: var(--green); color: var(--green); }
+.chip-high:hover, .chip-high.active   { background: rgba(251,191,36,0.1); border-color: var(--amber); color: var(--amber); }
+.chip-rising:hover, .chip-rising.active { background: rgba(74,222,128,0.1); border-color: var(--green); color: var(--green); }
+.chip-falling:hover, .chip-falling.active { background: rgba(248,113,113,0.1); border-color: var(--red); color: var(--red); }
+
+/* ── Legend ─────────────────────────── */
+.legend-section { background: var(--bg-3); border-bottom: 1px solid var(--border); padding: 14px 0; }
+.legend-bar { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text-2); }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.dot-very-high { background: #a78bfa; }
+.dot-high      { background: var(--green); }
+.dot-medium    { background: var(--amber); }
+.dot-low       { background: var(--text-3); }
+.legend-arrow { font-size: 0.85rem; }
+.arrow-up  { color: var(--green); }
+.arrow-down { color: var(--red); }
+.legend-divider { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+
+/* ── Market Data Grid ───────────────── */
+.market-loading { text-align: center; padding: 80px 0; }
+.market-loading p { color: var(--text-2); margin-top: 8px; }
+
+.market-cities-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr));
+  gap: 24px;
+}
+
+/* City Card */
+.city-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: var(--trans);
+  animation: fadeInUp 0.4s ease both;
+}
+.city-card:hover { border-color: var(--border-2); box-shadow: var(--shadow); }
+
+.city-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+}
+.city-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Syne', sans-serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+.city-name i { color: var(--amber); font-size: 0.9rem; }
+.city-count { font-size: 0.75rem; color: var(--text-3); }
+
+.crop-rows { padding: 8px 0; }
+.crop-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 80px 100px;
+  align-items: center;
+  padding: 11px 20px;
+  border-bottom: 1px solid rgba(74,222,128,0.05);
+  transition: var(--trans);
+  gap: 8px;
+}
+.crop-row:last-child { border-bottom: none; }
+.crop-row:hover { background: rgba(74,222,128,0.03); }
+
+.cr-name { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+.cr-price { font-size: 0.95rem; font-weight: 700; color: var(--text); font-family: 'Syne', sans-serif; }
+.cr-unit  { font-size: 0.65rem; color: var(--text-3); display: block; }
+
+.cr-change {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 50px;
+}
+.cr-change.up   { color: var(--green-2); background: rgba(34,197,94,0.1); }
+.cr-change.down { color: var(--red);     background: rgba(248,113,113,0.1); }
+
+.cr-demand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  border-radius: 50px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.demand-very-high { background: rgba(167,139,250,0.12); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25); }
+.demand-high      { background: rgba(74,222,128,0.1);   color: var(--green); border: 1px solid rgba(74,222,128,0.2); }
+.demand-medium    { background: rgba(251,191,36,0.1);   color: var(--amber); border: 1px solid rgba(251,191,36,0.2); }
+.demand-low       { background: rgba(107,140,108,0.15); color: var(--text-3); border: 1px solid rgba(107,140,108,0.2); }
+
+/* No Results */
+.no-results {
+  text-align: center;
+  padding: 80px 0;
+  color: var(--text-3);
+}
+.no-results i { font-size: 3rem; margin-bottom: 16px; }
+.no-results h3 { font-size: 1.2rem; font-weight: 700; color: var(--text-2); margin-bottom: 8px; }
+.no-results p  { font-size: 0.875rem; margin-bottom: 24px; }
+
+/* ── Chart Section ──────────────────── */
+.chart-section { background: var(--bg-2); }
+.chart-wrapper {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.chart-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.chart-tabs { display: flex; gap: 4px; }
+.chart-tab {
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  transition: var(--trans);
+}
+.chart-tab:hover, .chart-tab.active {
+  background: var(--green-glow);
+  border-color: var(--green);
+  color: var(--green);
+}
+.chart-city-select select {
+  padding: 7px 12px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+  transition: var(--trans);
+}
+.chart-city-select select:focus { border-color: var(--green); }
+.chart-canvas-wrap { padding: 24px; height: 360px; position: relative; }
+
+/* ── Price Table ────────────────────── */
+.table-wrapper { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+.price-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; min-width: 900px; }
+.price-table th {
+  padding: 12px 16px;
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-weight: 700;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+.price-table th:first-child { text-align: left; }
+.price-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(74,222,128,0.05);
+  text-align: right;
+  color: var(--text);
+  font-weight: 500;
+}
+.price-table td:first-child { text-align: left; font-weight: 700; }
+.price-table tr:last-child td { border-bottom: none; }
+.price-table tr:hover td { background: rgba(74,222,128,0.03); }
+.price-table td.not-available { color: var(--text-3); font-size: 0.75rem; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .market-cities-grid { grid-template-columns: 1fr; }
+  .crop-row { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .cr-demand { display: none; }
+  .chart-canvas-wrap { height: 260px; }
+}
+
+@media (max-width: 600px) {
+  .ticker-label { padding: 0 10px; font-size: 0.62rem; }
+  .ticker-content { font-size: 0.72rem; }
+  .crop-row { grid-template-columns: 1fr 1fr; }
+  .search-bar-section { padding: 12px 0; top: var(--nav-h); }
+  .search-box { padding: 6px 12px; }
+  .search-box input { font-size: 0.85rem; }
+  .search-btn { padding: 7px 12px; font-size: 0.78rem; }
+  .chart-controls { padding: 12px; flex-direction: column; align-items: flex-start; }
+  .chart-canvas-wrap { padding: 12px; height: 240px; }
+  .chart-city-select select { width: 100%; }
+  .market-hero { padding-bottom: 60px; }
+  .price-ticker { height: 38px; }
+  .legend-bar { gap: 12px; }
+  .legend-item { font-size: 0.72rem; }
