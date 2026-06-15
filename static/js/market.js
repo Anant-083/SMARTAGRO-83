@@ -10,11 +10,11 @@
 ═══════════════════════════════════════════════ */
 
 /* ── State ──────────────────────────────────── */
-let allMarketData  = {};
-let allLocations   = [];
-let marketChart    = null;
+let allMarketData = {};
+let allLocations = [];
+let marketChart = null;
 let activeChartType = 'line';
-let activeFilter   = 'all';
+let activeFilter = 'all';
 let currentChartCity = 'Delhi';
 
 /* ══════════════════════════════════════════════
@@ -60,9 +60,9 @@ async function loadTranslations(lang) {
     }
     try {
         const res = await fetch('/api/translate-market', {
-            method:  'POST',
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ lang }),
+            body: JSON.stringify({ lang }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -92,13 +92,13 @@ async function loadAllMarkets() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
-        allMarketData = data.markets   || {};
-        allLocations  = data.locations || Object.keys(allMarketData);
+        allMarketData = data.markets || {};
+        allLocations = data.locations || Object.keys(allMarketData);
 
         if (Object.keys(allMarketData).length === 0)
             throw new Error('Empty market data');
 
-        const liveCount   = data.live_count   || 0;
+        const liveCount = data.live_count || 0;
         const staticCount = data.static_count || 0;
         console.log(`[Market] Live: ${liveCount} | MSP fallback: ${staticCount}`);
 
@@ -110,12 +110,15 @@ async function loadAllMarkets() {
         renderMarketGrid(allMarketData);
         buildTicker(allMarketData);
         buildPriceTable(allMarketData);
+        window.initMarketTranslation();
 
         const firstCity = allLocations[0] || 'Delhi';
         currentChartCity = firstCity;
         const sel = document.getElementById('chartCitySelect');
         if (sel) sel.value = firstCity;
         buildChart(allMarketData, firstCity, 'line');
+        const currentLang = localStorage.getItem('agrosmart_lang') || 'en';
+        if (currentLang !== 'en') loadTranslations(currentLang);
 
     } catch (err) {
         console.error('[Market] Load error:', err);
@@ -149,9 +152,9 @@ function updateDataSourceBadge(liveCount, staticCount) {
 
 function hideLoading() {
     const loader = document.getElementById('marketLoading');
-    const grid   = document.getElementById('marketCitiesGrid');
+    const grid = document.getElementById('marketCitiesGrid');
     if (loader) loader.style.display = 'none';
-    if (grid)   grid.style.display   = '';
+    if (grid) grid.style.display = '';
 }
 
 /* ══════════════════════════════════════════════
@@ -182,27 +185,27 @@ function renderMarketGrid(markets) {
     if (none) none.style.display = 'none';
     grid.style.display = '';
 
-    const cropLabel   = _t('Crop')   || 'Crop';
-    const priceLabel  = _t('Price')  || 'Price';
+    const cropLabel = _t('Crop') || 'Crop';
+    const priceLabel = _t('Price') || 'Price';
     const changeLabel = _t('Change') || 'Change';
     const demandLabel = _t('Demand') || 'Demand';
-    const cropsLabel  = _t('crops')  || 'crops';
+    const cropsLabel = _t('crops') || 'crops';
 
     let hasVisible = false;
 
     grid.innerHTML = entries.map(([city, crops], cityIdx) => {
-        let filtered = crops;
-        if (activeFilter === 'Very High') {
-            filtered = crops.filter(c => c.demand === 'Very High');
-        } else if (activeFilter === 'rising') {
-            filtered = crops.filter(c => c.change > 0);
-        } else if (activeFilter === 'falling') {
-            filtered = crops.filter(c => c.change < 0);
-        }
-        if (filtered.length === 0) return '';
-        hasVisible = true;
+                let filtered = crops;
+                if (activeFilter === 'Very High') {
+                    filtered = crops.filter(c => c.demand === 'Very High');
+                } else if (activeFilter === 'rising') {
+                    filtered = crops.filter(c => c.change > 0);
+                } else if (activeFilter === 'falling') {
+                    filtered = crops.filter(c => c.change < 0);
+                }
+                if (filtered.length === 0) return '';
+                hasVisible = true;
 
-        return `
+                return `
         <div class="city-card" style="animation-delay:${cityIdx * 0.05}s">
             <div class="city-card-header">
                 <div class="city-name">
@@ -220,18 +223,18 @@ function renderMarketGrid(markets) {
                 ${filtered.map(crop => {
                     const isUp   = crop.change >= 0;
                     const pctAbs = Math.abs(crop.change).toFixed(1);
-                    return `
+                   return `
                     <div class="crop-row">
-                        <div class="cr-name">${tCrop(crop.crop)}</div>
+                        <div class="cr-name" data-crop-key="${crop.crop_key || crop.crop}">${tCrop(crop.crop)}</div>
                         <div>
                             <div class="cr-price">₹${crop.price.toLocaleString('en-IN')}</div>
-                            <div class="cr-unit">${_t('quintal') || crop.unit}</div>
+                            <div class="cr-unit" data-translate-market="quintal">${_t('quintal') || crop.unit}</div>
                         </div>
                         <div class="cr-change ${isUp ? 'up' : 'down'}">
                             <i class="fas fa-arrow-${isUp ? 'up' : 'down'}"></i>
                             ${pctAbs}%
                         </div>
-                        <div class="cr-demand demand-${getDemandClass(crop.demand)}">
+                        <div class="cr-demand demand-${getDemandClass(crop.demand)}" data-demand-key="${crop.demand}">
                             ${tDemand(crop.demand)}
                         </div>
                     </div>`;
