@@ -1,9 +1,3 @@
-/* ═══════════════════════════════════════════════
-   main.js — shared across all pages
-   Handles: navbar scroll, toast, hamburger,
-            location request, weather fetch
-═══════════════════════════════════════════════ */
-
 /* ── Navbar scroll effect ───────────────────── */
 const navbar = document.getElementById('navbar');
 window.addEventListener('scroll', () => {
@@ -226,6 +220,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const saved = sessionStorage.getItem('alert_count');
     if (saved) updateAlertBadge(parseInt(saved));
     observeAnimations();
+
+    // ── Restore saved language and notify diagnose.js ──
+    const savedLang = localStorage.getItem('smartagro_lang') || 'en';
+    window.currentLang = savedLang;
+    if (savedLang !== 'en') {
+        document.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: savedLang } }));
+    }
 
     // ── Close lang dropdown on outside tap (mobile) ──
     document.addEventListener('click', e => {
