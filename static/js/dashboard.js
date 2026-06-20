@@ -1,8 +1,225 @@
-/* ═══════════════════════════════════════════════
-   dashboard.js — index page logic
-   Handles: location → weather → crops → calendar
-═══════════════════════════════════════════════ */
+/* ── Dashboard Translation State ─────────────── */
+window._dashTrans = {}; // holds current translations
+window._lastCropData = null; // cache last API response for re-render
+window._dashTranslateInProgress = false; // guards against overlapping requests
 
+function dt(key) {
+    return window._dashTrans[key] || key;
+}
+
+/* ── Native names shown in the "Translating to…" overlay ───── */
+const DASH_LANG_DISPLAY_NAMES = {
+    hi: 'हिन्दी',
+    bn: 'বাংলা',
+    te: 'తెలుగు',
+    mr: 'मराठी',
+    ta: 'தமிழ்',
+    gu: 'ગુજરાતી',
+    kn: 'ಕನ್ನಡ',
+    ml: 'മലയാളം',
+    pa: 'ਪੰਜਾਬੀ',
+    or: 'ଓଡ଼ିଆ',
+    as: 'অসমীয়া',
+    ur: 'اردو',
+    mai: 'मैथिली',
+    sat: 'ᱥᱟᱱᱛᱟᱲᱤ',
+    ks: 'کٲشُر',
+    ne: 'नेपाली',
+    sd: 'سنڌي',
+    kok: 'कोंकणी',
+    mni: 'মৈতৈলোন্',
+    bodo: 'बड़ो',
+    doi: 'डोगरी',
+    sa: 'संस्कृत',
+    en: 'English',
+};
+
+/* ── Buffering / loading overlay for slow first-time translations ─────
+   Translation calls an LLM on the backend and can take several seconds
+   the first time a language is requested (subsequent switches hit the
+   server-side cache and are fast). This overlay gives clear feedback
+   instead of leaving the page looking stuck. ────────────────────────── */
+function ensureDashTranslateOverlayStyles() {
+    if (document.getElementById('dashTranslateOverlayStyle')) return;
+    const style = document.createElement('style');
+    style.id = 'dashTranslateOverlayStyle';
+    style.textContent = `
+    .dash-translate-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(10, 16, 12, 0.55);
+        backdrop-filter: blur(3px);
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.2s ease;
+    }
+    .dash-translate-overlay.visible { opacity: 1; pointer-events: all; }
+    .dash-translate-box {
+        background: var(--bg-1, #102013);
+        border: 1px solid var(--green, #4ade80);
+        border-radius: 16px;
+        padding: 28px 32px;
+        max-width: 320px;
+        text-align: center;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+        animation: dashTransPopIn 0.25s ease;
+    }
+    @keyframes dashTransPopIn {
+        from { transform: scale(0.92); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
+    }
+    .dash-translate-spinner {
+        width: 38px; height: 38px; margin: 0 auto 14px;
+        border: 3px solid rgba(74, 222, 128, 0.25);
+        border-top-color: var(--green, #4ade80);
+        border-radius: 50%;
+        animation: dashTransSpin 0.8s linear infinite;
+    }
+    @keyframes dashTransSpin { to { transform: rotate(360deg); } }
+    .dash-translate-title {
+        color: var(--text-1, #f1f5f1);
+        font-weight: 600; font-size: 0.95rem; margin-bottom: 6px;
+    }
+    .dash-translate-sub {
+        color: var(--text-3, #94a3a0);
+        font-size: 0.78rem; line-height: 1.4;
+    }
+    .dash-translate-dots span {
+        display: inline-block; opacity: 0.3;
+        animation: dashTransDot 1.2s infinite;
+    }
+    .dash-translate-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .dash-translate-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dashTransDot { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
+    `;
+    document.head.appendChild(style);
+}
+
+function showDashTranslateOverlay(langCode) {
+    ensureDashTranslateOverlayStyles();
+    let overlay = document.getElementById('dashTranslateOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'dashTranslateOverlay';
+        overlay.className = 'dash-translate-overlay';
+        document.body.appendChild(overlay);
+    }
+    const name = DASH_LANG_DISPLAY_NAMES[langCode] || langCode.toUpperCase();
+    overlay.innerHTML = `
+      <div class="dash-translate-box">
+        <div class="dash-translate-spinner"></div>
+        <div class="dash-translate-title">Translating to ${name}<span class="dash-translate-dots"><span>.</span><span>.</span><span>.</span></span></div>
+        <div class="dash-translate-sub">First-time translation can take a few seconds. It'll be instant after this.</div>
+      </div>`;
+    // requestAnimationFrame so the transition actually animates in
+    requestAnimationFrame(() => overlay.classList.add('visible'));
+}
+
+function hideDashTranslateOverlay() {
+    const overlay = document.getElementById('dashTranslateOverlay');
+    if (overlay) overlay.classList.remove('visible');
+}
+
+async function applyDashboardLanguage(langCode) {
+    if (window._dashTranslateInProgress) return; // ignore overlapping requests
+
+    if (langCode === 'en') {
+        window._dashTrans = {};
+        retranslateStaticUI();
+        if (window._lastCropData) {
+            renderCrops(window._lastCropData);
+            renderCalendar(window._lastCropData.calendar);
+            renderPesticides(window._lastCropData.pesticides);
+            const label = document.getElementById('seasonLabel');
+            if (label && window._lastCropData.season) {
+                label.textContent = `${dt('Season')}: ${dt(window._lastCropData.season)}`;
+            }
+        }
+        return;
+    }
+
+    window._dashTranslateInProgress = true;
+    showDashTranslateOverlay(langCode);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // generous — first-time calls can be slow
+
+    try {
+        const res = await fetch('/api/translate-dashboard', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lang: langCode }),
+            signal: controller.signal,
+        });
+        const data = await res.json();
+        if (data && data.translations && Object.keys(data.translations).length) {
+            window._dashTrans = data.translations;
+            showToast(`Dashboard translated to ${DASH_LANG_DISPLAY_NAMES[langCode] || langCode}`, 'success');
+        } else {
+            window._dashTrans = {};
+            showToast('Translation is unavailable right now — showing English instead.', 'warning');
+        }
+    } catch (e) {
+        console.error('Dashboard translation failed:', e);
+        window._dashTrans = {};
+        const msg = e && e.name === 'AbortError' ?
+            'Translation took too long — showing English instead.' :
+            'Translation failed — showing English instead.';
+        showToast(msg, 'error');
+    } finally {
+        clearTimeout(timeoutId);
+        hideDashTranslateOverlay();
+        window._dashTranslateInProgress = false;
+    }
+
+    // Re-render everything with new language
+    retranslateStaticUI();
+    if (window._lastCropData) {
+        renderCrops(window._lastCropData);
+        renderCalendar(window._lastCropData.calendar);
+        renderPesticides(window._lastCropData.pesticides);
+        const label = document.getElementById('seasonLabel');
+        if (label && window._lastCropData.season) {
+            label.textContent = `${dt('Season')}: ${dt(window._lastCropData.season)}`;
+        }
+    }
+}
+
+function retranslateStaticUI() {
+    // Section headers
+    const map = {
+        'section_weather': 'Current Weather Conditions',
+        'section_weather_sub': 'Live data from your location',
+        'forecast_title': '6-Day Forecast',
+        'stat_temp': 'Temperature',
+        'stat_humidity': 'Humidity',
+        'stat_wind': 'Wind',
+        'stat_visibility': 'Visibility',
+        'stat_pressure': 'Pressure',
+        'section_crops': 'Crop Recommendations',
+        'section_crops_sub': 'Based on your climate & location',
+        'section_advisory': 'Crop Advisory Calendar',
+        'section_advisory_sub': 'Week-by-week action plan for your crops',
+        'section_pest': 'Pesticide & Pest Control Guide',
+        'section_pest_sub': 'Safe and effective crop protection plan',
+        'section_quick': 'Quick Actions',
+        'quick_diagnose': 'Diagnose Crop Disease',
+        'quick_diagnose_sub': 'Upload or take a photo of your crop',
+        'quick_market': 'Check Market Prices',
+        'quick_market_sub': 'Live mandi prices across India',
+        'quick_alerts': 'View Active Alerts',
+        'quick_alerts_sub': 'Weather & pest warnings for your area',
+        'footer_text': 'Empowering farmers with AI-driven precision agriculture',
+    };
+    Object.entries(map).forEach(([key, engVal]) => {
+        const el = document.querySelector(`[data-translate="${key}"]`);
+        if (el) el.textContent = dt(engVal);
+    });
+    // Stat labels
+    document.querySelectorAll('.stat-label[data-translate]').forEach(el => {
+        const key = el.getAttribute('data-translate');
+        if (map[key]) el.textContent = dt(map[key]);
+    });
+}
 /* ── Entry point: Get Location ──────────────── */
 function requestLocation() {
     window.requestLocation = window.requestLocation || (() => {});
@@ -211,13 +428,13 @@ async function loadCropRecommendations(current) {
             })
         });
         const data = await res.json();
+        window._lastCropData = data; // cache for re-render on language change
         renderCrops(data);
         renderCalendar(data.calendar);
         renderPesticides(data.pesticides);
 
-        // Update season label
         const label = document.getElementById('seasonLabel');
-        if (label) label.textContent = `Season: ${data.season} — ${current.city}`;
+        if (label) label.textContent = `${dt('Season')}: ${dt(data.season)} — ${current.city}`;
     } catch (err) {
         console.error('Crop API error:', err);
         showToast('Could not load crop recommendations.', 'error');
@@ -237,45 +454,44 @@ function renderCrops(data) {
       <div class="crop-card-top">
         <div class="crop-emoji">${crop.icon}</div>
         <div class="crop-match-badge">
-          <i class="fas fa-check-circle"></i> ${crop.match} Match
+          <i class="fas fa-check-circle"></i> ${crop.match} ${dt('Match')}
         </div>
       </div>
-      <div class="crop-name">${crop.name}</div>
-      <div class="crop-desc">${crop.description}</div>
+      <div class="crop-name">${dt(crop.name)}</div>
+      <div class="crop-desc">${dt(crop.description)}</div>
       <div class="crop-meta">
         <div class="cm-item">
-          <span class="cm-label">Season</span>
-          <span class="cm-val">${crop.season.split(' ')[0]}</span>
+          <span class="cm-label">${dt('Season')}</span>
+          <span class="cm-val">${dt(crop.season.split(' ')[0])}</span>
         </div>
         <div class="cm-item">
-          <span class="cm-label">Water Need</span>
-          <span class="cm-val">${crop.water}</span>
+          <span class="cm-label">${dt('Water Need')}</span>
+          <span class="cm-val">${dt(crop.water)}</span>
         </div>
         <div class="cm-item">
-          <span class="cm-label">Expected Yield</span>
+          <span class="cm-label">${dt('Expected Yield')}</span>
           <span class="cm-val">${crop.yield}</span>
         </div>
         <div class="cm-item">
-          <span class="cm-label">Duration</span>
+          <span class="cm-label">${dt('Duration')}</span>
           <span class="cm-val">${crop.duration}</span>
         </div>
         <div class="cm-item">
-          <span class="cm-label">Soil Type</span>
-          <span class="cm-val">${crop.soil}</span>
+          <span class="cm-label">${dt('Soil Type')}</span>
+          <span class="cm-val">${dt(crop.soil)}</span>
         </div>
         <div class="cm-item">
-          <span class="cm-label">Fertilizer</span>
+          <span class="cm-label">${dt('Fertilizer')}</span>
           <span class="cm-val">${crop.fertilizer}</span>
         </div>
       </div>
       <div class="crop-profit">
         <i class="fas fa-indian-rupee-sign"></i>
-        Estimated Profit: ${crop.profit}
+        ${dt('Estimated Profit')}: ${crop.profit}
       </div>
     </div>
   `).join('');
 
-    // Stagger animations
     setTimeout(() => observeAnimations(), 100);
 }
 
@@ -292,13 +508,13 @@ function renderCalendar(calendar) {
       <div class="timeline-card">
         <div class="tc-date">
           <span>${item.date}</span>
-          <span class="tc-week">Week ${item.week}</span>
+          <span class="tc-week">${dt('Week')} ${item.week}</span>
         </div>
         <div class="tc-activity">
           <i class="${getActivityIcon(item.type)}" style="margin-right:6px;color:${getActivityColor(item.type)}"></i>
-          ${item.activity}
+          ${dt(item.activity)}
         </div>
-        <span class="tc-type ${item.type}">${capitalize(item.type)}</span>
+        <span class="tc-type ${item.type}">${dt(item.type)}</span>
       </div>
     </div>
   `).join('');
@@ -340,23 +556,23 @@ function renderPesticides(pesticides) {
     cards.innerHTML = pesticides.map(p => `
     <div class="pest-crop-card">
       <div class="pcc-header">
-        <span>🌾</span> ${p.crop} — Pest Control Plan
+        <span>🌾</span> ${dt(p.crop)} — ${dt('Pest Control Plan')}
       </div>
       <div class="pcc-items">
         ${p.guides.map(g => `
           <div class="pcc-item">
-            <div class="pcc-pest"><i class="fas fa-bug" style="color:var(--amber);margin-right:6px"></i>${g.pest}</div>
+            <div class="pcc-pest"><i class="fas fa-bug" style="color:var(--amber);margin-right:6px"></i>${dt(g.pest)}</div>
             <div class="pcc-meta">
               <span><i class="fas fa-flask"></i> ${g.pesticide}</span>
               <span><i class="fas fa-scale-balanced"></i> ${g.dose}</span>
             </div>
             <div style="font-size:0.75rem;color:var(--text-3);margin-top:4px">
-              <i class="fas fa-clock"></i> ${g.timing}
+              <i class="fas fa-clock"></i> ${dt('Timing')}: ${g.timing}
             </div>
             <div class="pcc-eco eco-${g.eco}">
               ${g.eco
-                ? '<i class="fas fa-leaf"></i> Eco-Friendly'
-                : '<i class="fas fa-flask"></i> Chemical'}
+                ? `<i class="fas fa-leaf"></i> ${dt('Eco-Friendly')}`
+                : `<i class="fas fa-flask"></i> ${dt('Chemical')}`}
             </div>
           </div>
         `).join('')}
