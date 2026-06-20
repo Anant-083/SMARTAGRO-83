@@ -1,10 +1,3 @@
-/* ═══════════════════════════════════════════════
-   kisan-helper.js — Kisan Helper Voice+Chat Widget
-   v4: chatbot.js UI/logic merged into widget shell.
-   Fullscreen overlay chat + language picker retained.
-   Connects to Flask /api/chat (app.py).
-   Kisan Helpline link preserved.
-═══════════════════════════════════════════════ */
 (function() {
 
     /* ── Inject HTML ─────────────────────────── */
@@ -27,6 +20,9 @@
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
+          <button class="kw-icon-btn" id="kisanPauseBtn" onclick="toggleKisanTypingPause()" title="Pause reply" style="display:none">
+            <i class="fas fa-pause"></i>
+          </button>
           <button class="kw-icon-btn" onclick="newKisanChat()" title="New Chat">
             <i class="fas fa-plus"></i>
           </button>
@@ -51,9 +47,14 @@
         </button>
         <input type="text" id="kisanInput" placeholder="Type or speak..."
                onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendKisanMessage()}"/>
-        <button class="kw-send-btn" onclick="sendKisanMessage()">
+        <button class="kw-send-btn" id="kisanSendBtn" onclick="sendKisanMessage()">
           <i class="fas fa-paper-plane"></i>
         </button>
+      </div>
+      <div class="kw-rec-banner" id="kisanRecBanner" style="display:none">
+        <span class="kw-rec-dot"></span>
+        <span id="kisanRecTime">Listening… 0:00</span>
+        <span class="kw-rec-hint">Tap mic again to stop</span>
       </div>
     </div>
   </div>
@@ -105,7 +106,9 @@
 #kisanWindow {
   width: 100%; max-width: 520px;
   height: min(92vh, 100vh);
+  height: min(92dvh, 100dvh);
   max-height: 100vh;
+  max-height: 100dvh;
   background: var(--card, #111a12);
   border-radius: 20px 20px 0 0;
   display: flex; flex-direction: column;
@@ -142,17 +145,18 @@
 
 /* Lang picker */
 .kw-lang-picker {
-  padding: 12px 14px 8px;
-  border-bottom: 1px solid rgba(74,222,128,.12);
+  border-top: 15px solid rgba(74,222,128,.12);
+  padding: 80px 20px 15px;
+  border-bottom: 15px solid rgba(74,222,128,.12);
   flex-shrink: 0;
-  background: var(--bg-2, #0e1510);
+  background: var(--bg-2, #0e0f15);
 }
 .kw-lang-picker p {
   font-size: .8rem; color: var(--text-2, #a7c4a8);
   text-align: center; margin: 0 0 10px;
 }
 .kw-lang-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;
 }
 .kw-lang-opt {
   padding: 8px 4px; border-radius: 8px; font-size: .68rem; font-weight: 600;
@@ -228,6 +232,9 @@
   background: rgba(74,222,128,.15); border-color: #4ade80; color: #4ade80;
 }
 .kw-speak-btn.speaking { animation: speakPulse .9s ease-in-out infinite; }
+.kw-speak-btn.paused {
+  background: rgba(251,191,36,.15); border-color: #fbbf24; color: #fbbf24;
+}
 @keyframes speakPulse { 0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.35)} 50%{box-shadow:0 0 0 5px rgba(74,222,128,0)} }
 
 /* Typing dots */
@@ -275,11 +282,41 @@
   animation: micP .8s ease-in-out infinite;
 }
 @keyframes micP { 0%,100%{transform:scale(1)} 50%{transform:scale(1.18)} }
+.kw-mic-btn.processing { color: #4ade80; }
+.kw-mic-btn.processing i { animation: kwspin .8s linear infinite; }
+@keyframes kwspin { to { transform: rotate(360deg); } }
+.kw-mic-btn:disabled, .kw-send-btn:disabled { opacity: .45; cursor: not-allowed; animation: none; }
 .kw-send-btn {
   background: linear-gradient(135deg, #166534, #22c55e);
   color: #fff; box-shadow: 0 2px 8px rgba(74,222,128,.3);
 }
 .kw-send-btn:active { transform: scale(1.08); }
+
+/* Recording banner */
+.kw-rec-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 16px 10px;
+  font-size: .72rem; color: #f87171;
+  background: var(--bg-2, #0e1510);
+  flex-shrink: 0;
+}
+.kw-rec-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: #f87171;
+  animation: kwp 1s ease-in-out infinite; flex-shrink: 0;
+}
+.kw-rec-hint { color: var(--text-3, #6b8c6d); margin-left: auto; }
+
+/* Pause (stop generation) header button */
+#kisanPauseBtn { background: rgba(248,113,113,.18); }
+#kisanPauseBtn:active { background: rgba(248,113,113,.4); }
+
+/* Typewriter cursor */
+.kw-caret {
+  display: inline-block; width: 2px; height: 1em; margin-left: 1px;
+  background: #4ade80; vertical-align: text-bottom;
+  animation: caretBlink .85s step-end infinite;
+}
+@keyframes caretBlink { 50% { opacity: 0; } }
 
 /* Helpline */
 #kisanHelpline {
@@ -309,9 +346,11 @@ body.light-theme .kw-mic-btn    { background: #f0fdf4; color: #374151; border-co
 body.light-theme .kw-lang-opt   { background: #f0fdf4; color: #374151; border-color: rgba(22,101,52,.2); }
 body.light-theme .kw-lang-picker { background: #f9fafb; }
 body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba(22,101,52,.6); }
+body.light-theme .kw-rec-banner { background: #f9fafb; }
+body.light-theme .kw-rec-hint   { color: #9ca3af; }
 
 @media (max-width: 600px) {
-  #kisanWindow { border-radius: 16px 16px 0 0; }
+  #kisanWindow { border-radius: 16px 16px 0 0; height: min(94vh, 100dvh); }
   #kisanToggleBtn {
     bottom: calc(16px + env(safe-area-inset-bottom, 0px));
     right: calc(12px + env(safe-area-inset-right, 0px));
@@ -325,6 +364,17 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
   #kisanHelpline strong { display: none; }
   .kw-lang-grid { grid-template-columns: repeat(3, 1fr); }
   .kw-lang-opt { min-height: 46px; font-size: .65rem; }
+  .kw-msg.bot  { max-width: 92%; }
+  .kw-msg.user { max-width: 88%; }
+  .kw-input-bar { padding: 8px 10px; padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
+  #kisanInput { font-size: 16px; } /* keep >=16px to prevent iOS auto-zoom on focus */
+  .kw-icon-btn { width: 38px; height: 38px; font-size: .95rem; } /* bigger tap target on touch */
+  .kw-mic-btn, .kw-send-btn { width: 46px; height: 46px; }
+  .kw-speak-btn { width: 30px; height: 30px; }
+}
+
+@media (max-width: 360px) {
+  .kw-lang-grid { grid-template-columns: repeat(2, 1fr); }
 }`;
     document.head.appendChild(S);
 
@@ -332,12 +382,25 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     let chatHistory = [];
     let isOpen = false;
     let isBusy = false;
-    let recognition = null;
-    let isRecording = false;
     let langChosen = false;
     let chosenLang = null;
+
+    // Voice input (MediaRecorder + server-side Whisper transcription —
+    // works the same on iOS Safari, Android, desktop Chrome/Firefox/Edge).
+    let mediaRecorder = null;
+    let mediaStream = null;
+    let audioChunks = [];
+    let isRecording = false;
+    let isTranscribing = false;
+    let recordTimerInterval = null;
+    let recordStartTime = 0;
     let speakingMsgId = null;
+    let pausedMsgId = null;
     let availableVoices = [];
+    const msgTextById = {};
+
+    // Line-by-line typewriter animation state.
+    let activeTyper = null; // controller object for the in-progress animation
 
     /* ── Language data (same as original) ───── */
     const LANG_NAMES = {
@@ -408,25 +471,25 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     };
     const GREETINGS = {
         en: '🌾 Hello farmer friend! I am SmartAgro Kisan Helper. Ask me about crops, weather, market prices, or government schemes like PM-KISAN.',
-        hi: '🌾 Namaste kisan bhai! Main SmartAgro Kisan Sahayak hoon. Aap mujhse mausam, fasal, baazaar bhaav ya sarkari yojanaon ke baare mein pooch sakte hain.',
-        bn: '🌾 Nomoshkar krishok bondhu! Ami SmartAgro Kishan Sahayak. Aabohawa, foshol, bazar mulyo ba shorkaari prokolpo shomporke jiggesh korun.',
-        te: '🌾 Namaskaram raitu mitruda! Nenu SmartAgro Kisan Helper. Vaatavaranam, pantalu, market dhaaralu gurinchi adagandi.',
-        mr: '🌾 Namaskar shetkari mithraa! Mi SmartAgro Kisan Sahaayyak aahe. Hawamaan, peek, baazarbhaav kiva sarkari yojanaanbaddal vicharaa.',
-        ta: '🌾 Vanakkam vivasaayi nanbharE! Naan SmartAgro Kisan Udaviyaalar. Vaanilai, payirkal, sandai vilaikal pattri keelungal.',
-        gu: '🌾 Namaste khedoot mitra! Hoon SmartAgro Kisan Sahayak chhun. Hawaman, paak, bazaar bhaav vishe poochho.',
-        kn: '🌾 Namaskara raita mitra! Naanu SmartAgro Kisan Sahayaka. Hawaamaana, bele, maarukatte belgalu bagge keeli.',
-        ml: '🌾 Namaskaram karshaka suhruthe! Njaan SmartAgro Kisan Assistant. Kaalavastha, vilakkal, vipani vila choadikhkoo.',
-        pa: '🌾 Sat sri akaal kisan veere! Main SmartAgro Kisan Sahayak haan. Mausam, fasal, mandi bhaav baare puchho.',
-        or: '🌾 Namaskar krushak bandhu! Mun SmartAgro Kisan Sahayak. Aabhaawa, fasal, bazaar mulya bishayare pachaara.',
-        as: '🌾 Nomashkar krishhok bondhu! Moi SmartAgro Kishan Shahayak. Batar, shashyo, bazaar mulyo ba charkari aanshonir bishaye soodibo.',
-        ur: '🌾 Assalaamu alaykum kisaan dost! Main SmartAgro Kisaan Madadgaar hoon. Mausam, fasal, mandi bhaao ke baare mein poochhein.',
-        mai: '🌾 Pranaam kisaan bhai! Hum SmartAgro Kisaan Sahayak chhi. Mausam, fasaL, baazaar bhaav ke baare mein poochhu.',
-        ne: '🌾 Namaste kisaan saathi! Ma SmartAgro Kisaan Sahayak hun. Mausam, baali, bazaar mulya vaa sarkari yojanabare sodhnus.',
-        sa: '🌾 Namaste krishak mitra! Aham SmartAgro Kisan Sahayakah asmi. Krishi, vaayumanDalam, vipaNana mulya cha prichhatu.',
-        kok: '🌾 Namaskar shetkari dosta! Haaov SmartAgro Kisan Sahaayyak. Hawaman, peek, baazarbhaav visheen vichaar.',
-        mni: '🌾 Namashkaar chaashi nungshibaa! Ei SmartAgro Kisan Helper ni. Paangam, pambei, market tengbang bishayada haabigU.',
-        bodo: '🌾 Namashkaar kheti aaro! Ang SmartAgro Kisan Sahayak. Mausam, kheti, bazaar biphaan bilaai dinthiz.',
-        doi: '🌾 Namaste kisaan bhai! Main SmartAgro Kisaan Sahayak aan. Mausam, fasal, bazaar bhaav baare puchho.',
+        hi: '🌾 नमस्ते किसान भाई! मैं SmartAgro किसान सहायक हूँ। आप मुझसे मौसम, फसल, बाज़ार भाव या सरकारी योजनाओं के बारे में पूछ सकते हैं।',
+        bn: '🌾 নমস্কার কৃষক বন্ধু! আমি SmartAgro কিষান সহায়ক। আবহাওয়া, ফসল, বাজার দর বা সরকারি প্রকল্প সম্পর্কে জিজ্ঞাসা করুন।',
+        te: '🌾 నమస్కారం రైతు మిత్రుడా! నేను SmartAgro కిసాన్ సహాయకుడు. వాతావరణం, పంటలు, మార్కెట్ ధరల గురించి అడగండి.',
+        mr: '🌾 नमस्कार शेतकरी मित्र! मी SmartAgro किसान सहाय्यक आहे. हवामान, पीक, बाजारभाव किंवा सरकारी योजनांबद्दल विचारा.',
+        ta: '🌾 வணக்கம் விவசாயி நண்பரே! நான் SmartAgro கிசான் உதவியாளர். வானிலை, பயிர்கள், சந்தை விலைகள் பற்றி கேளுங்கள்.',
+        gu: '🌾 નમસ્તે ખેડૂત મિત્ર! હું SmartAgro કિસાન સહાયક છું. હવામાન, પાક, બજાર ભાવ વિશે પૂછો.',
+        kn: '🌾 ನಮಸ್ಕಾರ ರೈತ ಮಿತ್ರ! ನಾನು SmartAgro ಕಿಸಾನ್ ಸಹಾಯಕ. ಹವಾಮಾನ, ಬೆಳೆ, ಮಾರುಕಟ್ಟೆ ಬೆಲೆಗಳ ಬಗ್ಗೆ ಕೇಳಿ.',
+        ml: '🌾 നമസ്കാരം കർഷക സുഹൃത്തേ! ഞാൻ SmartAgro കിസാൻ സഹായി ആണ്. കാലാവസ്ഥ, വിളകൾ, വിപണി വില എന്നിവയെക്കുറിച്ച് ചോദിക്കൂ.',
+        pa: '🌾 ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਕਿਸਾਨ ਵੀਰ! ਮੈਂ SmartAgro ਕਿਸਾਨ ਸਹਾਇਕ ਹਾਂ। ਮੌਸਮ, ਫਸਲ, ਮੰਡੀ ਭਾਅ ਬਾਰੇ ਪੁੱਛੋ।',
+        or: '🌾 ନମସ୍କାର କୃଷକ ବନ୍ଧୁ! ମୁଁ SmartAgro କିଷାନ ସହାୟକ। ପାଣିପାଗ, ଫସଲ, ବାଜାର ମୂଲ୍ୟ ବିଷୟରେ ପଚାରନ୍ତୁ।',
+        as: '🌾 নমস্কার কৃষক বন্ধু! মই SmartAgro কিষান সহায়ক। বতৰ, শস্য, বজাৰ দাম বা চৰকাৰী আঁচনিৰ বিষয়ে সুধিব পাৰে।',
+        ur: '🌾 السلام علیکم کسان دوست! میں SmartAgro کسان مددگار ہوں۔ موسم، فصل، منڈی بھاؤ کے بارے میں پوچھیں۔',
+        mai: '🌾 प्रणाम किसान भाय! हम SmartAgro किसान सहायक छी। मौसम, फसल, बाजार भाव बारे पुछू।',
+        ne: '🌾 नमस्ते किसान साथी! म SmartAgro किसान सहायक हुँ। मौसम, बाली, बजार मूल्य वा सरकारी योजनाबारे सोध्नुहोस्।',
+        sa: '🌾 नमस्ते कृषकमित्र! अहं SmartAgro कृषकसहायकः अस्मि। वायुमण्डलं, कृषिं, विपणिमूल्यं वा सरकारीयोजनाः विषये पृच्छन्तु।',
+        kok: '🌾 नमस्कार शेतकरी मित्रा! हाव SmartAgro किसान सहाय्यक. हवामान, पीक, बाजारभावा बद्दल विचार.',
+        mni: '🌾 ꯀꯨꯝꯖꯥ ꯂꯧꯅꯨ ꯂꯧꯔꯤꯕ ꯃꯔꯨꯑꯣꯏꯕ! ꯑꯩ SmartAgro ꯀꯤꯁꯥꯟ ꯃꯇꯦꯡ ꯄꯥꯡꯕꯥ ꯅꯤ। ꯅꯣꯡꯁꯤꯡ, ꯂꯧꯕꯨꯀ, ꯁꯦꯟꯂꯣꯟꯒꯤ ꯃꯌꯥꯏ ꯍꯪꯕꯤꯌꯨ꯫',
+        bodo: '🌾 नमस्कार बेसो रां! आं SmartAgro किसान हेल्पार। दिनै सिथिल, फिसा, बाजार दाम बेसेबा खालामनो हागौ।',
+        doi: '🌾 नमस्ते किसान भाई! मैं SmartAgro किसान सहायक आं। मौसम, फसल, बजार भाव बारै पुच्छो।',
     };
 
     /* ── Voice helpers (from chatbot.js) ────── */
@@ -436,14 +499,38 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
         window.speechSynthesis.onvoiceschanged = loadVoices;
     }
 
+    const VOICE_FALLBACK_CHAIN = {
+        ur: ['ur-PK', 'ur-IN', 'ur', 'hi-IN'],
+        or: ['or-IN', 'hi-IN', 'bn-IN'],
+        as: ['as-IN', 'bn-IN', 'hi-IN'],
+        mai: ['mai-IN', 'hi-IN'],
+        ne: ['ne-NP', 'ne-IN', 'hi-IN'],
+        sa: ['sa-IN', 'hi-IN'],
+        kok: ['kok-IN', 'mr-IN', 'hi-IN'],
+        mni: ['mni-IN', 'bn-IN', 'as-IN', 'hi-IN'],
+        bodo: ['brx-IN', 'hi-IN', 'as-IN'],
+        doi: ['doi-IN', 'hi-IN', 'pa-IN'],
+    };
+
     function getBestVoice(langCode) {
-        const speechLang = VOICE_LANGS[langCode] || 'en-IN';
-        const prefix = speechLang.split('-')[0];
-        return availableVoices.find(v => v.lang === speechLang) ||
-            availableVoices.find(v => v.lang.startsWith(prefix)) ||
-            availableVoices.find(v => v.lang === 'en-IN') ||
-            availableVoices.find(v => v.lang.startsWith('en')) ||
-            null;
+        if (!availableVoices.length) return null;
+        const primary = VOICE_LANGS[langCode] || 'en-IN';
+        const chain = VOICE_FALLBACK_CHAIN[langCode] || [primary];
+
+        for (const tag of chain) {
+            const exact = availableVoices.find(v => v.lang === tag);
+            if (exact) return exact;
+        }
+        for (const tag of chain) {
+            const prefix = tag.split('-')[0];
+            const partial = availableVoices.find(v => v.lang.startsWith(prefix));
+            if (partial) return partial;
+        }
+        return null;
+    }
+
+    function hasUsableVoice(langCode) {
+        return getBestVoice(langCode) !== null;
     }
 
     function cleanTextForSpeech(text) {
@@ -457,53 +544,134 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
             .replace(/\s+/g, ' ').trim();
     }
 
-    /* ── TTS — speak a message ───────────────── */
-    function speakText(text, msgId, btn) {
-        if (!window.speechSynthesis) return;
-        stopSpeaking();
+
+    function setSpeakBtnState(msgId, state) {
+        // state: 'idle' | 'speaking' | 'paused'
+        const btn = document.getElementById('ksb_' + msgId);
+        if (!btn) return;
+        btn.classList.remove('speaking', 'paused');
+        if (state === 'speaking') {
+            btn.classList.add('speaking');
+            btn.innerHTML = '<i class="fas fa-pause"></i>';
+            btn.title = 'Pause';
+        } else if (state === 'paused') {
+            btn.classList.add('paused');
+            btn.innerHTML = '<i class="fas fa-play"></i>';
+            btn.title = 'Resume';
+        } else {
+            btn.innerHTML = '<i class="fas fa-volume-up"></i>';
+            btn.title = 'Listen';
+        }
+    }
+
+    function updateFab(state) {
+        const fab = document.getElementById('kisanToggleBtn');
+        if (!fab) return;
+        if (state === 'speaking') {
+            fab.innerHTML = '<i class="fas fa-volume-up" style="color:#fff;font-size:1.3rem"></i><span class="kw-pulse"></span>';
+        } else if (isOpen) {
+            fab.innerHTML = '<i class="fas fa-times" style="color:#fff;font-size:1.25rem"></i>';
+        }
+    }
+
+    function speakText(text, msgId) {
+        if (!window.speechSynthesis) {
+            alert('Voice playback is not supported in this browser.');
+            return;
+        }
+        msgTextById[msgId] = text;
+        window.speechSynthesis.cancel();
+        if (speakingMsgId && speakingMsgId !== msgId) setSpeakBtnState(speakingMsgId, 'idle');
+        if (pausedMsgId && pausedMsgId !== msgId) setSpeakBtnState(pausedMsgId, 'idle');
+        pausedMsgId = null;
 
         const clean = cleanTextForSpeech(text);
         if (!clean) return;
 
         const lang = getAppLang();
         const voice = getBestVoice(lang);
+
+        if (!voice) {
+            setSpeakBtnState(msgId, 'idle');
+            alert('Voice playback for ' + (LANG_ROMAN[lang] || lang) + ' is not available on this device yet. ' +
+                'You can still read the reply, or switch to a language with voice support.');
+            return;
+        }
+
         const utter = new SpeechSynthesisUtterance(clean);
-        utter.lang = VOICE_LANGS[lang] || 'en-IN';
+        utter.lang = voice.lang;
         utter.rate = 0.88;
         utter.pitch = 1;
         utter.volume = 1;
-        if (voice) utter.voice = voice;
+        utter.voice = voice;
 
         utter.onstart = () => {
             speakingMsgId = msgId;
-            if (btn) { btn.classList.add('speaking');
-                btn.innerHTML = '<i class="fas fa-stop"></i>';
-                btn.title = 'Stop'; }
-            const fab = document.getElementById('kisanToggleBtn');
-            if (fab) fab.innerHTML = '<i class="fas fa-volume-up" style="color:#fff;font-size:1.3rem"></i><span class="kw-pulse"></span>';
+            setSpeakBtnState(msgId, 'speaking');
+            updateFab('speaking');
         };
-        utter.onend = utter.onerror = () => {
-            speakingMsgId = null;
-            if (btn) { btn.classList.remove('speaking');
-                btn.innerHTML = '<i class="fas fa-volume-up"></i>';
-                btn.title = 'Listen'; }
-            const fab = document.getElementById('kisanToggleBtn');
-            if (fab && isOpen) fab.innerHTML = '<i class="fas fa-times" style="color:#fff;font-size:1.25rem"></i>';
+        utter.onend = () => {
+            if (speakingMsgId === msgId) speakingMsgId = null;
+            setSpeakBtnState(msgId, 'idle');
+            updateFab('idle');
         };
+        utter.onerror = () => {
+            if (speakingMsgId === msgId) speakingMsgId = null;
+            if (pausedMsgId === msgId) pausedMsgId = null;
+            setSpeakBtnState(msgId, 'idle');
+            updateFab('idle');
+        };
+        setTimeout(() => window.speechSynthesis.speak(utter), 30);
+    }
 
-        window.speechSynthesis.speak(utter);
+    function pauseSpeaking(msgId) {
+        if (window.speechSynthesis) {
+            try { window.speechSynthesis.pause(); } catch (e) {}
+        }
+        speakingMsgId = null;
+        pausedMsgId = msgId;
+        setSpeakBtnState(msgId, 'paused');
+        updateFab('idle');
+    }
+
+    function resumeSpeaking(msgId) {
+        const synth = window.speechSynthesis;
+        if (!synth) return;
+        try { synth.resume(); } catch (e) {}
+        setSpeakBtnState(msgId, 'speaking');
+        speakingMsgId = msgId;
+        pausedMsgId = null;
+        updateFab('speaking');
+
+        setTimeout(() => {
+            if (speakingMsgId === msgId && synth.paused) {
+                const text = msgTextById[msgId];
+                if (text !== undefined) speakText(text, msgId);
+            }
+        }, 350);
     }
 
     function stopSpeaking() {
         if (window.speechSynthesis) try { window.speechSynthesis.cancel(); } catch (e) {}
-        if (speakingMsgId) {
-            const btn = document.getElementById('ksb_' + speakingMsgId);
-            if (btn) { btn.classList.remove('speaking');
-                btn.innerHTML = '<i class="fas fa-volume-up"></i>';
-                btn.title = 'Listen'; }
-            speakingMsgId = null;
+        if (speakingMsgId) setSpeakBtnState(speakingMsgId, 'idle');
+        if (pausedMsgId) setSpeakBtnState(pausedMsgId, 'idle');
+        speakingMsgId = null;
+        pausedMsgId = null;
+        updateFab('idle');
+    }
+
+    function handleSpeakClick(msgId) {
+        const text = msgTextById[msgId];
+        if (text === undefined) return;
+        if (speakingMsgId === msgId) {
+            pauseSpeaking(msgId);
+        } else if (pausedMsgId === msgId) {
+            resumeSpeaking(msgId);
+        } else {
+            speakText(text, msgId);
         }
     }
+    window.kisanHandleSpeakClick = handleSpeakClick;
 
     /* ── Helpers ─────────────────────────────── */
     function getMsgs() { return document.getElementById('kisanMessages'); }
@@ -542,6 +710,8 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
             fab.classList.remove('chat-open');
             setTimeout(() => { overlay.style.display = 'none'; }, 280);
             stopSpeaking();
+            if (activeTyper) activeTyper.finish();
+            if (isRecording) stopRecording();
         }
     };
 
@@ -571,20 +741,32 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
                 tx = 0,
                 ty = 0;
 
-            btn.addEventListener('touchstart', e => { isTouched = true;
+            btn.addEventListener('touchstart', e => {
+                isTouched = true;
                 touchScrolled = false;
                 tx = e.touches[0].clientX;
-                ty = e.touches[0].clientY; }, { passive: true });
+                ty = e.touches[0].clientY;
+            }, { passive: true });
             btn.addEventListener('touchmove', e => { if (Math.abs(e.touches[0].clientX - tx) > 8 || Math.abs(e.touches[0].clientY - ty) > 8) touchScrolled = true; }, { passive: true });
-            btn.addEventListener('touchend', e => { if (touchScrolled) return;
+            btn.addEventListener('touchend', e => {
+                if (touchScrolled) return;
                 e.preventDefault();
                 btn.classList.add('kl-active');
-                setTimeout(() => { btn.classList.remove('kl-active');
-                    pickLang(code); }, 200); }, { passive: false });
-            btn.addEventListener('click', () => { if (isTouched) return;
-                pickLang(code); });
-            btn.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault();
-                    pickLang(code); } });
+                setTimeout(() => {
+                    btn.classList.remove('kl-active');
+                    pickLang(code);
+                }, 200);
+            }, { passive: false });
+            btn.addEventListener('click', () => {
+                if (isTouched) return;
+                pickLang(code);
+            });
+            btn.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    pickLang(code);
+                }
+            });
 
             grid.appendChild(btn);
         });
@@ -611,6 +793,10 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     /* ── New Chat ────────────────────────────── */
     window.newKisanChat = function() {
         stopSpeaking();
+        if (activeTyper) activeTyper.finish();
+        if (isRecording) stopRecording();
+        const pauseBtn = document.getElementById('kisanPauseBtn');
+        if (pauseBtn) pauseBtn.style.display = 'none';
         chatHistory = [];
         langChosen = false;
         chosenLang = null;
@@ -668,7 +854,7 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     window.sendKisanMessage = async function() {
         const input = getInput();
         const text = (input ? input.value : '').trim();
-        if (!text || isBusy) return;
+        if (!text || isBusy || isRecording || isTranscribing) return;
         if (input) input.value = '';
 
         if (!langChosen) {
@@ -682,34 +868,24 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
         addUserMsg(text);
         chatHistory.push({ role: 'user', content: text });
         isBusy = true;
+        const sendBtn = document.getElementById('kisanSendBtn');
+        const micBtn = document.getElementById('kisanMicBtn');
+        if (sendBtn) sendBtn.disabled = true;
+        if (micBtn) micBtn.disabled = true;
         const typingEl = addTyping();
 
         // Detect language switch
         const msgLower = text.toLowerCase();
         for (const [kw, code] of Object.entries(LANG_KEYWORDS)) {
-            if (msgLower.includes(kw)) { chosenLang = code;
-                updateSubLabel(code); break; }
+            if (msgLower.includes(kw)) {
+                chosenLang = code;
+                updateSubLabel(code);
+                break;
+            }
         }
 
         const lang = getAppLang();
-
-        // Build messages with romanization rule (preserved from original)
-        let messagesPayload = [...chatHistory];
-        if (lang !== 'en') {
-            const langName = LANG_ROMAN[lang] || lang;
-            messagesPayload = [{
-                role: 'user',
-                content: '[SYSTEM RULE - FOLLOW FOR EVERY REPLY] ' +
-                    'You must reply in ' + langName + ' language. ' +
-                    'Write every word using ONLY English/Roman alphabet letters (transliteration). ' +
-                    'NEVER use native script. ' +
-                    'Hindi example: write "Aapki fasal achhi hai, paani dete rahein" NOT native script. ' +
-                    'Bengali example: write "Aapnar fasal bhalo ache" NOT native script. ' +
-                    'Tamil example: write "Ungal payir nalla irukku" NOT native script. ' +
-                    'Telugu example: write "Mee panta baagundi" NOT native script. ' +
-                    'Apply this rule for ALL languages — Roman letters only, every reply, no exceptions.'
-            }, ...chatHistory];
-        }
+        const messagesPayload = [...chatHistory];
 
         try {
             const res = await fetch('/api/chat', {
@@ -724,6 +900,8 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
                 const err = await res.json().catch(() => ({}));
                 addBotMsg('Server error: ' + (err.error || res.status) + '. Please try again.');
                 isBusy = false;
+                if (sendBtn) sendBtn.disabled = false;
+                if (micBtn) micBtn.disabled = false;
                 return;
             }
 
@@ -739,6 +917,8 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
             console.error('[KisanHelper]', e);
         }
         isBusy = false;
+        if (sendBtn) sendBtn.disabled = false;
+        if (micBtn) micBtn.disabled = false;
     };
 
     /* ── Message renderers (chatbot.js style) ── */
@@ -756,7 +936,7 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
         scrollBot();
     }
 
-    function addBotMsg(text, autoSpeak) {
+    function addBotMsg(text, animate) {
         const msgs = getMsgs();
         if (!msgs) return;
 
@@ -765,16 +945,16 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
         div.className = 'kw-msg bot';
         div.id = id;
         div.dataset.text = text;
+        msgTextById[id] = text;
 
-        const formatted = text
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/\n/g, '<br>')
+        const escape = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const formatLine = line => escape(line)
             .replace(/•/g, '<span style="color:#4ade80;margin-right:4px;font-weight:700">•</span>');
 
         div.innerHTML = `
       <div class="kw-msg-avatar">🌾</div>
       <div class="kw-msg-body">
-        <div class="kw-bubble">${formatted}</div>
+        <div class="kw-bubble"><span class="kw-bubble-text"></span></div>
         <div class="kw-msg-footer">
           <button class="kw-speak-btn" id="ksb_${id}" title="Listen">
             <i class="fas fa-volume-up"></i>
@@ -786,18 +966,99 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
         msgs.appendChild(div);
         scrollBot();
 
-        // Wire speak button
+        const textEl = div.querySelector('.kw-bubble-text');
+
+        // Wire speak button to the shared pause/resume-aware handler.
         const btn = document.getElementById('ksb_' + id);
         if (btn) {
             btn.addEventListener('click', function(e) {
                 e.stopPropagation();
-                if (speakingMsgId === id) { stopSpeaking(); return; }
-                speakText(text, id, btn);
+                handleSpeakClick(id);
             });
         }
 
-        if (autoSpeak) speakText(text, id, btn);
+        if (animate) {
+            startTypewriter(textEl, text, formatLine, id);
+            speakText(text, id);
+        } else {
+            textEl.innerHTML = text.split('\n').map(formatLine).join('<br>');
+        }
     }
+
+    function startTypewriter(textEl, fullText, formatLine, msgId) {
+        if (activeTyper) activeTyper.finish();
+
+        const lines = fullText.split('\n');
+        let lineIdx = 0;
+        let paused = false;
+        let done = false;
+        let timer = null;
+
+        const pauseBtn = document.getElementById('kisanPauseBtn');
+        if (pauseBtn) pauseBtn.style.display = 'flex';
+
+        function renderUpTo(idx, withCaret) {
+            const shown = lines.slice(0, idx).map(formatLine).join('<br>');
+            textEl.innerHTML = shown + (withCaret ? '<span class="kw-caret"></span>' : '');
+            scrollBot();
+        }
+
+        function step() {
+            if (paused || done) return;
+            lineIdx++;
+            renderUpTo(lineIdx, lineIdx < lines.length);
+            if (lineIdx >= lines.length) {
+                finish();
+                return;
+            }
+            const justShown = lines[lineIdx - 1] || '';
+            const delay = justShown.trim().length === 0 ? 120 :
+                /[.!?]$/.test(justShown.trim()) ? 320 : 200;
+            timer = setTimeout(step, delay);
+        }
+
+        function finish() {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            renderUpTo(lines.length, false);
+            if (activeTyper && activeTyper.id === msgId) activeTyper = null;
+            if (pauseBtn) pauseBtn.style.display = 'none';
+        }
+
+        activeTyper = {
+            id: msgId,
+            pause() {
+                if (done) return;
+                paused = true;
+                clearTimeout(timer);
+                renderUpTo(lineIdx, true); // freeze with caret showing, no spin
+                if (pauseBtn) {
+                    pauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+                    pauseBtn.title = 'Resume reply';
+                }
+            },
+            resume() {
+                if (done || !paused) return;
+                paused = false;
+                if (pauseBtn) {
+                    pauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
+                    pauseBtn.title = 'Pause reply';
+                }
+                step();
+            },
+            finish, // jump straight to the full text (used by New Chat / closing)
+            isPaused: () => paused
+        };
+
+        timer = setTimeout(step, 150);
+    }
+
+    window.toggleKisanTypingPause = function() {
+        if (!activeTyper) return;
+        if (activeTyper.isPaused()) activeTyper.resume();
+        else activeTyper.pause();
+    };
 
     function addTyping() {
         const msgs = getMsgs();
@@ -817,40 +1078,154 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
         return div;
     }
 
-    /* ── Voice input (chatbot.js style) ─────── */
-    window.toggleKisanMic = function() {
-        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SR) { alert('Voice input not supported. Please use Chrome or Safari.'); return; }
+    function getRecBanner() { return document.getElementById('kisanRecBanner'); }
 
-        if (isRecording) { if (recognition) recognition.stop(); return; }
+    function getRecTimeLabel() { return document.getElementById('kisanRecTime'); }
 
-        const lang = getAppLang();
-        recognition = new SR();
-        recognition.lang = VOICE_LANGS[lang] || 'hi-IN';
-        recognition.continuous = false;
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
+    function pickRecordingMimeType() {
+        const candidates = [
+            'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg;codecs=opus'
+        ];
+        for (const type of candidates) {
+            if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(type)) return type;
+        }
+        return '';
+    }
 
+    function setMicState(state) {
+        // state: 'idle' | 'recording' | 'processing'
         const btn = document.getElementById('kisanMicBtn');
+        const sendBtn = document.getElementById('kisanSendBtn');
+        const banner = getRecBanner();
+        if (!btn) return;
+        btn.classList.remove('recording', 'processing');
+        if (state === 'recording') {
+            btn.classList.add('recording');
+            btn.innerHTML = '<i class="fas fa-stop"></i>';
+            btn.title = 'Stop recording';
+            if (banner) banner.style.display = 'flex';
+            if (sendBtn) sendBtn.disabled = true;
+        } else if (state === 'processing') {
+            btn.classList.add('processing');
+            btn.innerHTML = '<i class="fas fa-circle-notch"></i>';
+            btn.title = 'Transcribing…';
+            if (banner) banner.style.display = 'none';
+            if (sendBtn) sendBtn.disabled = true;
+        } else {
+            btn.innerHTML = '<i class="fas fa-microphone"></i>';
+            btn.title = 'Voice';
+            if (banner) banner.style.display = 'none';
+            if (sendBtn) sendBtn.disabled = false;
+        }
+    }
 
-        recognition.onstart = () => { isRecording = true; if (btn) { btn.classList.add('recording');
-                btn.innerHTML = '<i class="fas fa-stop"></i>'; } };
-        recognition.onresult = e => { const t = Array.from(e.results).map(r => r[0].transcript).join(''); if (getInput()) getInput().value = t; };
-        recognition.onend = () => {
-            isRecording = false;
-            if (btn) { btn.classList.remove('recording');
-                btn.innerHTML = '<i class="fas fa-microphone"></i>'; }
-            const val = getInput() ? getInput().value.trim() : '';
-            if (val) sendKisanMessage();
-        };
-        recognition.onerror = () => {
-            isRecording = false;
-            if (btn) { btn.classList.remove('recording');
-                btn.innerHTML = '<i class="fas fa-microphone"></i>'; }
-        };
+    function startRecordTimer() {
+        recordStartTime = Date.now();
+        const label = getRecTimeLabel();
+        recordTimerInterval = setInterval(() => {
+            const secs = Math.floor((Date.now() - recordStartTime) / 1000);
+            const m = Math.floor(secs / 60),
+                s = secs % 60;
+            if (label) label.textContent = 'Listening… ' + m + ':' + String(s).padStart(2, '0');
+            if (secs >= 60) stopRecording(); // safety cap matches server-side limit
+        }, 250);
+    }
 
-        try { recognition.start(); } catch (e) { console.error('[KisanMic]', e); }
+    function stopRecordTimer() {
+        clearInterval(recordTimerInterval);
+        recordTimerInterval = null;
+    }
+
+    window.toggleKisanMic = function() {
+        if (isRecording) { stopRecording(); return; }
+        if (isTranscribing) return;
+        startRecording();
     };
+
+    async function startRecording() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            alert('Microphone access is not supported in this browser.');
+            return;
+        }
+        try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (e) {
+            console.error('[KisanMic]', e);
+            alert('Microphone access denied. Please allow microphone permission and try again.');
+            return;
+        }
+
+        const mimeType = pickRecordingMimeType();
+        try {
+            mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
+        } catch (e) {
+            console.error('[KisanMic]', e);
+            alert('Could not start recording on this device.');
+            mediaStream.getTracks().forEach(t => t.stop());
+            return;
+        }
+
+        audioChunks = [];
+        mediaRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) audioChunks.push(e.data); };
+        mediaRecorder.onstop = handleRecordingStop;
+
+        mediaRecorder.start();
+        isRecording = true;
+        setMicState('recording');
+        startRecordTimer();
+    }
+
+    function stopRecording() {
+        if (!mediaRecorder || !isRecording) return;
+        isRecording = false;
+        stopRecordTimer();
+        try { mediaRecorder.stop(); } catch (e) { console.error('[KisanMic]', e); }
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(t => t.stop());
+            mediaStream = null;
+        }
+    }
+
+    async function handleRecordingStop() {
+        setMicState('processing');
+        isTranscribing = true;
+
+        const blobType = (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm';
+        const blob = new Blob(audioChunks, { type: blobType });
+        audioChunks = [];
+
+        if (blob.size < 500) {
+            setMicState('idle');
+            isTranscribing = false;
+            return;
+        }
+
+        const ext = blobType.includes('mp4') ? 'm4a' : blobType.includes('ogg') ? 'ogg' : 'webm';
+        const formData = new FormData();
+        formData.append('audio', blob, 'voice.' + ext);
+
+        try {
+            const res = await fetch('/api/stt', { method: 'POST', body: formData });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) {
+                console.error('[KisanMic STT]', data.error || res.status);
+                addBotMsg('Sorry, I could not hear that clearly. Please try again.');
+            } else if (data.text) {
+                const input = getInput();
+                if (input) {
+                    input.value = data.text;
+                    input.focus();
+                }
+                await sendKisanMessage();
+            }
+        } catch (e) {
+            console.error('[KisanMic STT]', e);
+            addBotMsg('Connection error while transcribing your voice. Please check your internet and try again.');
+        } finally {
+            isTranscribing = false;
+            setMicState('idle');
+        }
+    }
 
     /* ── Sync with app language toggle ──────── */
     const _origSetLanguage = window.setLanguage;
