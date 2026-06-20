@@ -2,13 +2,166 @@
    alerts.js — Alerts page logic
    Handles: location → weather → alerts rendering,
             pest calendar, pesticide safety,
-            harmful/safe crops, risk chart
+            harmful/safe crops, risk chart,
+            full 23-language dynamic translation
 ═══════════════════════════════════════════════ */
 
 let allAlerts = [];
 let activeFilter = 'all';
 let riskChartInst = null;
 let currentWeather = null;
+
+/* ══════════════════════════════════════════════
+   ALERTS TRANSLATION SYSTEM
+══════════════════════════════════════════════ */
+let _alertsTx = {};
+const _alertsTxCache = {};
+let _alertsTxInProgress = false;
+
+function _at(key) {
+    if (!key) return '';
+    return _alertsTx[key] || key;
+}
+
+/* ── Language display names ─────────────────── */
+const ALERTS_LANG_NAMES = {
+    hi: 'हिन्दी',
+    bn: 'বাংলা',
+    te: 'తెలుగు',
+    mr: 'मराठी',
+    ta: 'தமிழ்',
+    gu: 'ગુજરાતી',
+    kn: 'ಕನ್ನಡ',
+    ml: 'മലയാളം',
+    pa: 'ਪੰਜਾਬੀ',
+    or: 'ଓଡ଼ିଆ',
+    as: 'অসমীয়া',
+    ur: 'اردو',
+    mai: 'मैथिली',
+    sat: 'ᱥᱟᱱᱛᱟᱲᱤ',
+    ks: 'کٲشُر',
+    ne: 'नेपाली',
+    sd: 'سنڌي',
+    kok: 'कोंकणी',
+    mni: 'মৈতৈলোন্',
+    bodo: 'बड़ो',
+    doi: 'डोगरी',
+    sa: 'संस्कृत',
+    en: 'English',
+};
+
+/* ── Buffering overlay ──────────────────────── */
+function _ensureAlertsOverlayCSS() {
+    if (document.getElementById('alertsTxOverlayStyle')) return;
+    const s = document.createElement('style');
+    s.id = 'alertsTxOverlayStyle';
+    s.textContent = `
+    .alerts-tx-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;
+        justify-content:center;background:rgba(10,16,12,0.55);backdrop-filter:blur(3px);
+        opacity:0;pointer-events:none;transition:opacity 0.2s ease}
+    .alerts-tx-overlay.visible{opacity:1;pointer-events:all}
+    .alerts-tx-box{background:var(--bg-1,#102013);border:1px solid var(--green,#4ade80);
+        border-radius:16px;padding:28px 32px;max-width:320px;text-align:center;
+        box-shadow:0 10px 40px rgba(0,0,0,0.35);animation:atxPopIn 0.25s ease}
+    @keyframes atxPopIn{from{transform:scale(0.92);opacity:0}to{transform:scale(1);opacity:1}}
+    .alerts-tx-spinner{width:38px;height:38px;margin:0 auto 14px;
+        border:3px solid rgba(74,222,128,0.25);border-top-color:var(--green,#4ade80);
+        border-radius:50%;animation:atxSpin 0.8s linear infinite}
+    @keyframes atxSpin{to{transform:rotate(360deg)}}
+    .alerts-tx-title{color:var(--text-1,#f1f5f1);font-weight:600;font-size:0.95rem;margin-bottom:6px}
+    .alerts-tx-sub{color:var(--text-3,#94a3a0);font-size:0.78rem;line-height:1.4}
+    .alerts-tx-dots span{display:inline-block;opacity:0.3;animation:atxDot 1.2s infinite}
+    .alerts-tx-dots span:nth-child(2){animation-delay:0.2s}
+    .alerts-tx-dots span:nth-child(3){animation-delay:0.4s}
+    @keyframes atxDot{0%,100%{opacity:0.3}50%{opacity:1}}
+    `;
+    document.head.appendChild(s);
+}
+
+function showAlertsOverlay(langCode) {
+    _ensureAlertsOverlayCSS();
+    let ov = document.getElementById('alertsTxOverlay');
+    if (!ov) {
+        ov = document.createElement('div');
+        ov.id = 'alertsTxOverlay';
+        ov.className = 'alerts-tx-overlay';
+        document.body.appendChild(ov);
+    }
+    const name = ALERTS_LANG_NAMES[langCode] || langCode.toUpperCase();
+    ov.innerHTML = `<div class="alerts-tx-box">
+        <div class="alerts-tx-spinner"></div>
+        <div class="alerts-tx-title">Translating to ${name}<span class="alerts-tx-dots"><span>.</span><span>.</span><span>.</span></span></div>
+        <div class="alerts-tx-sub">First-time translation can take a few seconds. It'll be instant after this.</div>
+    </div>`;
+    requestAnimationFrame(() => ov.classList.add('visible'));
+}
+
+function hideAlertsOverlay() {
+    const ov = document.getElementById('alertsTxOverlay');
+    if (ov) ov.classList.remove('visible');
+}
+
+/* ── Load translations from server ─────────── */
+async function loadAlertsTranslations(lang) {
+    lang = (lang || localStorage.getItem('agrosmart_lang') || 'en').toLowerCase().trim();
+
+    if (lang === 'en') {
+        _alertsTx = {};
+        reRenderAlerts();
+        return;
+    }
+
+    if (_alertsTxInProgress) return;
+    _alertsTxInProgress = true;
+
+    // Instant from cache
+    if (_alertsTxCache[lang]) {
+        _alertsTx = _alertsTxCache[lang];
+        reRenderAlerts();
+        _alertsTxInProgress = false;
+        return;
+    }
+
+    showAlertsOverlay(lang);
+
+    try {
+        const res = await fetch('/api/translate-alerts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lang })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        _alertsTx = data.translations || {};
+        _alertsTxCache[lang] = _alertsTx;
+        console.log(`[Alerts] ${Object.keys(_alertsTx).length} terms loaded for ${lang}`);
+    } catch (e) {
+        console.warn('[Alerts] Translation failed:', e);
+        _alertsTx = {};
+    }
+
+    // Re-render everything first, THEN lift overlay
+    reRenderAlerts();
+    hideAlertsOverlay();
+    _alertsTxInProgress = false;
+}
+
+/* ── Re-render all dynamic sections ────────── */
+function reRenderAlerts() {
+    if (!currentWeather) return;
+    renderAlertsList(allAlerts);
+    renderPestCalendar(currentWeather);
+    renderPesticideSafety(currentWeather);
+    renderHarmfulSafeCrops(currentWeather);
+    renderRiskChart(currentWeather, allAlerts);
+    // Also re-apply any [data-translate] static strings
+    if (typeof applyTranslations === 'function') applyTranslations();
+}
+
+/* ── Hook into global language switcher ─────── */
+document.addEventListener('langChanged', (e) => {
+    loadAlertsTranslations(e.detail?.lang || 'en');
+});
 
 /* ── Entry point: request location ─────────── */
 function requestAlertsLocation() {
@@ -88,6 +241,12 @@ async function loadAlertsData(lat, lon) {
             if (el) el.style.display = '';
         });
 
+        // Apply saved language translation immediately if non-English
+        const savedLang = localStorage.getItem('agrosmart_lang') || 'en';
+        if (savedLang !== 'en') {
+            await loadAlertsTranslations(savedLang);
+        }
+
     } catch (err) {
         console.error('Alerts load error:', err);
         showToast('Could not load alert data.', 'error');
@@ -144,14 +303,14 @@ function renderAlertsList(alerts) {
       <div class="alert-card-icon">${alert.icon}</div>
       <div class="alert-card-body">
         <div class="alert-card-top">
-          <span class="alert-card-title">${alert.title}</span>
-          <span class="alert-category ${getCatClass(alert.category)}">${alert.category}</span>
-          <span class="alert-category ${getTypeClass(alert.type)}">${capitalize(alert.type)}</span>
+          <span class="alert-card-title">${_at(alert.title) || alert.title}</span>
+          <span class="alert-category ${getCatClass(alert.category)}">${_at(alert.category) || alert.category}</span>
+          <span class="alert-category ${getTypeClass(alert.type)}">${_at(capitalize(alert.type)) || capitalize(alert.type)}</span>
         </div>
-        <div class="alert-card-msg">${alert.message}</div>
+        <div class="alert-card-msg">${_at(alert.message) || alert.message}</div>
         <div class="alert-card-action">
           <i class="fas fa-circle-right"></i>
-          <span><strong>Action:</strong> ${alert.action}</span>
+          <span><strong>${_at('Action') || 'Action'}:</strong> ${_at(alert.action) || alert.action}</span>
         </div>
       </div>
     </div>
@@ -289,8 +448,8 @@ function renderPestCalendar(weather) {
     const isHighRiskConditions = weather.humidity > 70 || weather.temp > 30;
 
     grid.innerHTML = SEASONAL_PESTS.map((pest, i) => {
-        const isCurrentRisk = isHighRiskConditions && pest.risk === 'High';
-        return `
+                const isCurrentRisk = isHighRiskConditions && pest.risk === 'High';
+                return `
       <div class="pest-cal-card ${isCurrentRisk ? 'current-risk' : ''}" 
            style="animation-delay:${i * 0.05}s;${isCurrentRisk ? 'border-color:rgba(248,113,113,0.35);' : ''}">
         <div class="pcal-header">
@@ -298,24 +457,24 @@ function renderPestCalendar(weather) {
             ${pest.icon}
           </div>
           <div>
-            <div class="pcal-name">${pest.name}</div>
+            <div class="pcal-name">${_at(pest.name) || pest.name}</div>
             <div class="pcal-season">
-              <i class="fas fa-calendar-alt" style="margin-right:4px;font-size:0.65rem"></i>${pest.season}
+              <i class="fas fa-calendar-alt" style="margin-right:4px;font-size:0.65rem"></i>${_at(pest.season) || pest.season}
             </div>
           </div>
-          ${isCurrentRisk ? '<span style="font-size:0.65rem;padding:2px 8px;background:rgba(248,113,113,0.1);color:var(--red);border-radius:50px;border:1px solid rgba(248,113,113,0.2)">⚠ Active Now</span>' : ''}
+          ${isCurrentRisk ? `<span style="font-size:0.65rem;padding:2px 8px;background:rgba(248,113,113,0.1);color:var(--red);border-radius:50px;border:1px solid rgba(248,113,113,0.2)">⚠ ${_at('Active Now') || 'Active Now'}</span>` : ''}
         </div>
         <div class="pcal-body">
           <div style="margin-bottom:6px;font-size:0.78rem;color:var(--text-3)">
             <i class="fas fa-seedling" style="color:var(--green);margin-right:4px"></i>
-            <strong>Affects:</strong> ${pest.crops}
+            <strong>${_at('Affects') || 'Affects'}:</strong> ${_at(pest.crops) || pest.crops}
           </div>
-          <div style="font-size:0.8rem;color:var(--text-2);margin-bottom:8px">${pest.description}</div>
+          <div style="font-size:0.8rem;color:var(--text-2);margin-bottom:8px">${_at(pest.description) || pest.description}</div>
           <div style="font-size:0.75rem;color:var(--teal)">
-            <i class="fas fa-shield-halved" style="margin-right:4px"></i>${pest.prevention}
+            <i class="fas fa-shield-halved" style="margin-right:4px"></i>${_at(pest.prevention) || pest.prevention}
           </div>
           <span class="pcal-risk risk-${pest.risk.toLowerCase()}">
-            <i class="fas fa-circle" style="font-size:0.4rem"></i> ${pest.risk} Risk
+            <i class="fas fa-circle" style="font-size:0.4rem"></i> ${_at(pest.risk) || pest.risk} ${_at('Risk') || 'Risk'}
           </span>
         </div>
       </div>`;
@@ -398,36 +557,36 @@ function renderPesticideSafety(weather) {
     grid.innerHTML = PESTICIDE_DATA.map((p, i) => `
     <div class="pesticide-card" style="animation-delay:${i * 0.06}s">
       <div class="pc-header">
-        <span>${p.icon}</span> ${p.name}
+        <span>${p.icon}</span> ${_at(p.name) || p.name}
       </div>
       <div class="pc-body">
         <div class="pc-item">
-          <span class="pc-item-label"><i class="fas fa-bug"></i> Target Pest</span>
-          <span class="pc-item-val">${p.targetPest}</span>
+          <span class="pc-item-label"><i class="fas fa-bug"></i> ${_at('Target Pest') || 'Target Pest'}</span>
+          <span class="pc-item-val">${_at(p.targetPest) || p.targetPest}</span>
         </div>
         <div class="pc-item">
-          <span class="pc-item-label"><i class="fas fa-flask"></i> Safe Dose</span>
+          <span class="pc-item-label"><i class="fas fa-flask"></i> ${_at('Safe Dose') || 'Safe Dose'}</span>
           <span class="pc-item-val" style="color:var(--green)">${p.safeDoze}</span>
         </div>
         <div class="pc-item">
-          <span class="pc-item-label"><i class="fas fa-triangle-exclamation"></i> Max Limit</span>
+          <span class="pc-item-label"><i class="fas fa-triangle-exclamation"></i> ${_at('Max Limit') || 'Max Limit'}</span>
           <span class="pc-item-val" style="color:var(--red)">${p.maxDose}</span>
         </div>
         <div class="pc-item">
-          <span class="pc-item-label"><i class="fas fa-rotate"></i> Interval</span>
-          <span class="pc-item-val">${p.interval}</span>
+          <span class="pc-item-label"><i class="fas fa-rotate"></i> ${_at('Interval') || 'Interval'}</span>
+          <span class="pc-item-val">${_at(p.interval) || p.interval}</span>
         </div>
         <div class="pc-item">
-          <span class="pc-item-label"><i class="fas fa-clock"></i> Pre-Harvest</span>
-          <span class="pc-item-val" style="color:var(--amber)">${p.waitingPeriod}</span>
+          <span class="pc-item-label"><i class="fas fa-clock"></i> ${_at('Pre-Harvest') || 'Pre-Harvest'}</span>
+          <span class="pc-item-val" style="color:var(--amber)">${_at(p.waitingPeriod) || p.waitingPeriod}</span>
         </div>
         <div class="pc-item">
-          <span class="pc-item-label"><i class="fas fa-helmet-safety"></i> PPE Required</span>
-          <span class="pc-item-val">${p.ppeRequired}</span>
+          <span class="pc-item-label"><i class="fas fa-helmet-safety"></i> ${_at('PPE Required') || 'PPE Required'}</span>
+          <span class="pc-item-val">${_at(p.ppeRequired) || p.ppeRequired}</span>
         </div>
         <div class="pc-warning">
           <i class="fas fa-circle-exclamation" style="flex-shrink:0;margin-top:1px"></i>
-          <span>${p.warning}</span>
+          <span>${_at(p.warning) || p.warning}</span>
         </div>
       </div>
     </div>
@@ -482,27 +641,27 @@ function renderHarmfulSafeCrops(weather) {
         harmful.map(c => `
         <div class="harmful-card">
           <div class="hsc-name">
-            <span style="font-size:1.5rem">${c.icon}</span> ${c.name}
-            <span style="margin-left:auto;font-size:0.7rem;padding:2px 8px;background:rgba(248,113,113,0.1);color:var(--red);border-radius:50px;border:1px solid rgba(248,113,113,0.2)">⚠ Risky</span>
+            <span style="font-size:1.5rem">${c.icon}</span> ${_at(c.name) || c.name}
+            <span style="margin-left:auto;font-size:0.7rem;padding:2px 8px;background:rgba(248,113,113,0.1);color:var(--red);border-radius:50px;border:1px solid rgba(248,113,113,0.2)">⚠ ${_at('Risky') || 'Risky'}</span>
           </div>
           <div class="hsc-reason">
-            ${c.reasons.map(r => `<div><i class="fas fa-xmark" style="color:var(--red);margin-right:4px"></i>${r}</div>`).join('')}
+            ${c.reasons.map(r => `<div><i class="fas fa-xmark" style="color:var(--red);margin-right:4px"></i>${_at(r) || r}</div>`).join('')}
           </div>
         </div>`)
       .join('')
-    : '<p style="color:var(--text-3);font-size:0.875rem">No harmful crops identified for current conditions.</p>';
+    : `<p style="color:var(--text-3);font-size:0.875rem">${_at('No harmful crops identified for current conditions.') || 'No harmful crops identified for current conditions.'}</p>`;
 
   safeGrid.innerHTML = safe.length > 0
     ? safe.map(c => `
         <div class="safe-card">
           <div class="hsc-name">
-            <span style="font-size:1.5rem">${c.icon}</span> ${c.name}
-            <span style="margin-left:auto;font-size:0.7rem;padding:2px 8px;background:rgba(74,222,128,0.1);color:var(--green);border-radius:50px;border:1px solid rgba(74,222,128,0.2)">✓ Safe</span>
+            <span style="font-size:1.5rem">${c.icon}</span> ${_at(c.name) || c.name}
+            <span style="margin-left:auto;font-size:0.7rem;padding:2px 8px;background:rgba(74,222,128,0.1);color:var(--green);border-radius:50px;border:1px solid rgba(74,222,128,0.2)">✓ ${_at('Safe') || 'Safe'}</span>
           </div>
           <div class="hsc-reason" style="margin-top:6px">
             <div style="display:flex;align-items:center;gap:6px">
               <i class="fas fa-check-circle" style="color:var(--green)"></i>
-              <span style="font-size:0.78rem;color:var(--text-2)">Suitable for ${temp}°C, ${humidity}% humidity</span>
+              <span style="font-size:0.78rem;color:var(--text-2)">${_at('Suitable for') || 'Suitable for'} ${temp}°C, ${humidity}% ${_at('humidity') || 'humidity'}</span>
             </div>
             <div style="margin-top:6px;height:4px;background:var(--bg-2);border-radius:2px;overflow:hidden">
               <div style="height:100%;width:${c.suitability}%;background:linear-gradient(90deg,var(--green-dark),var(--green));border-radius:2px;transition:width 1s ease"></div>
@@ -510,7 +669,7 @@ function renderHarmfulSafeCrops(weather) {
           </div>
         </div>`)
       .join('')
-    : '<p style="color:var(--text-3);font-size:0.875rem">No fully safe crops identified — check crop calendar.</p>';
+    : `<p style="color:var(--text-3);font-size:0.875rem">${_at('No fully safe crops identified — check crop calendar.') || 'No fully safe crops identified — check crop calendar.'}</p>`;
 }
 
 /* ── Risk Chart ─────────────────────────────── */
@@ -534,9 +693,9 @@ function renderRiskChart(weather, alerts) {
   riskChartInst = new Chart(canvas, {
     type: 'radar',
     data: {
-      labels: ['Heat Stress', 'Humidity Risk', 'Wind Damage', 'Pest Risk', 'Disease Risk'],
+      labels: [_at('Heat Stress')||'Heat Stress', _at('Humidity Risk')||'Humidity Risk', _at('Wind Damage')||'Wind Damage', _at('Pest Risk')||'Pest Risk', _at('Disease Risk')||'Disease Risk'],
       datasets: [{
-        label: 'Current Risk Level (%)',
+        label: _at('Current Risk Level (%)')||'Current Risk Level (%)',
         data: [
           Math.round(heatRisk),
           Math.round(humidRisk),
@@ -592,12 +751,12 @@ function renderRiskChart(weather, alerts) {
   if (!factors) return;
 
   const riskItems = [
-    { label: 'Heat Stress',   value: Math.round(heatRisk),    color: '#f87171' },
-    { label: 'Humidity Risk', value: Math.round(humidRisk),   color: '#38bdf8' },
-    { label: 'Wind Damage',   value: Math.round(windRisk),    color: '#94a3b8' },
-    { label: 'Pest Activity', value: Math.min(100, pestRisk), color: '#fbbf24' },
-    { label: 'Disease Risk',  value: Math.min(100, diseaseRisk), color: '#f87171' },
-    { label: 'Overall Risk',  value: overallRisk,             color: overallRisk > 60 ? '#f87171' : overallRisk > 35 ? '#fbbf24' : '#4ade80' },
+    { label: _at('Heat Stress')||'Heat Stress',     value: Math.round(heatRisk),       color: '#f87171' },
+    { label: _at('Humidity Risk')||'Humidity Risk', value: Math.round(humidRisk),      color: '#38bdf8' },
+    { label: _at('Wind Damage')||'Wind Damage',     value: Math.round(windRisk),       color: '#94a3b8' },
+    { label: _at('Pest Activity')||'Pest Activity', value: Math.min(100, pestRisk),    color: '#fbbf24' },
+    { label: _at('Disease Risk')||'Disease Risk',   value: Math.min(100, diseaseRisk), color: '#f87171' },
+    { label: _at('Overall Risk')||'Overall Risk',   value: overallRisk,                color: overallRisk > 60 ? '#f87171' : overallRisk > 35 ? '#fbbf24' : '#4ade80' },
   ];
 
   factors.innerHTML = riskItems.map(item => `
