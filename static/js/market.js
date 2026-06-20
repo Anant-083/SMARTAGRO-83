@@ -1,14 +1,3 @@
-/* ═══════════════════════════════════════════════
-   market.js — SmartAgro Market Prices
-   ✓ Data from /api/market (DataGov AGMARKNET + MSP fallback)
-   ✓ Real 8-point price history → interpolated 30-day trend
-   ✓ Zero Math.random — deterministic everywhere
-   ✓ Translation via /api/translate-market (keyed by English name)
-   ✓ Line/Bar/Radar charts with real change data
-   ✓ Search, filter chips, price table, ticker
-   ✓ Mobile-friendly rendering
-═══════════════════════════════════════════════ */
-
 /* ── State ──────────────────────────────────── */
 let allMarketData = {};
 let allLocations = [];
@@ -17,21 +6,14 @@ let activeChartType = 'line';
 let activeFilter = 'all';
 let currentChartCity = 'Delhi';
 
-/* ══════════════════════════════════════════════
-   TRANSLATION SYSTEM
-   Backend returns: { "Wheat": "गेहूं", "Rice": "चावल", ... }
-   We store that flat object and look up by English key directly.
-══════════════════════════════════════════════ */
 let _translations = {};
+const _translationCache = {};
+let _translationInProgress = false;
 
 function setTranslations(data) {
     _translations = data || {};
 }
 
-/**
- * Translate any key — crop name, demand label, or UI string.
- * Falls back to the original key if no translation found.
- */
 function _t(key) {
     if (!key) return '';
     return _translations[key] || key;
@@ -48,16 +30,134 @@ function tDemand(demand) {
 }
 
 /* ══════════════════════════════════════════════
-   LANGUAGE LOADING
-   Call this whenever the user switches language.
-   Pass the lang code e.g. 'hi', 'bn', 'te', 'en'
+   LANGUAGE DISPLAY NAMES (for overlay label)
 ══════════════════════════════════════════════ */
+const MARKET_LANG_DISPLAY_NAMES = {
+    hi: 'हिन्दी',
+    bn: 'বাংলা',
+    te: 'తెలుగు',
+    mr: 'मराठी',
+    ta: 'தமிழ்',
+    gu: 'ગુજરાતી',
+    kn: 'ಕನ್ನಡ',
+    ml: 'മലയാളം',
+    pa: 'ਪੰਜਾਬੀ',
+    or: 'ଓଡ଼ିଆ',
+    as: 'অসমীয়া',
+    ur: 'اردو',
+    mai: 'मैथिली',
+    sat: 'ᱥᱟᱱᱛᱟᱴ',
+    ks: 'کڲشُر',
+    ne: 'नेपाली',
+    sd: 'سنڈی',
+    kok: 'कोंकणी',
+    mni: 'মৈতৈলোন্',
+    bodo: 'बड़ो',
+    doi: 'डोगरी',
+    sa: 'संस्कृत',
+    en: 'English',
+};
+
+/* ══════════════════════════════════════════════
+   TRANSLATE OVERLAY
+══════════════════════════════════════════════ */
+function ensureMarketTranslateOverlayStyles() {
+    if (document.getElementById('marketTranslateOverlayStyle')) return;
+    const style = document.createElement('style');
+    style.id = 'marketTranslateOverlayStyle';
+    style.textContent = `
+    .market-translate-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(10, 16, 12, 0.55);
+        backdrop-filter: blur(3px);
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.2s ease;
+    }
+    .market-translate-overlay.visible { opacity: 1; pointer-events: all; }
+    .market-translate-box {
+        background: var(--bg-1, #102013);
+        border: 1px solid var(--green, #4ade80);
+        border-radius: 16px;
+        padding: 28px 32px;
+        max-width: 320px;
+        text-align: center;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+        animation: marketTransPopIn 0.25s ease;
+    }
+    @keyframes marketTransPopIn {
+        from { transform: scale(0.92); opacity: 0; }
+        to   { transform: scale(1);    opacity: 1; }
+    }
+    .market-translate-spinner {
+        width: 38px; height: 38px; margin: 0 auto 14px;
+        border: 3px solid rgba(74, 222, 128, 0.25);
+        border-top-color: var(--green, #4ade80);
+        border-radius: 50%;
+        animation: marketTransSpin 0.8s linear infinite;
+    }
+    @keyframes marketTransSpin { to { transform: rotate(360deg); } }
+    .market-translate-title {
+        color: var(--text-1, #f1f5f1);
+        font-weight: 600; font-size: 0.95rem; margin-bottom: 6px;
+    }
+    .market-translate-sub {
+        color: var(--text-3, #94a3a0);
+        font-size: 0.78rem; line-height: 1.4;
+    }
+    .market-translate-dots span {
+        display: inline-block; opacity: 0.3;
+        animation: marketTransDot 1.2s infinite;
+    }
+    .market-translate-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .market-translate-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes marketTransDot { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
+    `;
+    document.head.appendChild(style);
+}
+
+function showMarketTranslateOverlay(langCode) {
+    ensureMarketTranslateOverlayStyles();
+    let overlay = document.getElementById('marketTranslateOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'marketTranslateOverlay';
+        overlay.className = 'market-translate-overlay';
+        document.body.appendChild(overlay);
+    }
+    const name = MARKET_LANG_DISPLAY_NAMES[langCode] || langCode.toUpperCase();
+    overlay.innerHTML = `
+      <div class="market-translate-box">
+        <div class="market-translate-spinner"></div>
+        <div class="market-translate-title">Translating to ${name}<span class="market-translate-dots"><span>.</span><span>.</span><span>.</span></span></div>
+        <div class="market-translate-sub">First-time translation can take a few seconds. It\'ll be instant after this.</div>
+      </div>`;
+    requestAnimationFrame(() => overlay.classList.add('visible'));
+}
+
+function hideMarketTranslateOverlay() {
+    const overlay = document.getElementById('marketTranslateOverlay');
+    if (overlay) overlay.classList.remove('visible');
+}
+
 async function loadTranslations(lang) {
     if (!lang || lang === 'en') {
         setTranslations({});
         reRenderMarket();
         return;
     }
+    if (_translationInProgress) return;
+    _translationInProgress = true;
+
+    if (_translationCache[lang]) {
+        setTranslations(_translationCache[lang]);
+        reRenderMarket();
+        _translationInProgress = false;
+        return;
+    }
+
+    showMarketTranslateOverlay(lang);
+
     try {
         const res = await fetch('/api/translate-market', {
             method: 'POST',
@@ -66,13 +166,19 @@ async function loadTranslations(lang) {
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        setTranslations(data.translations || {});
+        const tx = data.translations || {};
+        _translationCache[lang] = tx; // cache for instant future switches
+        setTranslations(tx);
         console.log(`[Market] Translations loaded for ${data.lang_name || lang}: ${Object.keys(_translations).length} terms`);
     } catch (err) {
         console.warn('[Market] Translation load failed, using English:', err);
         setTranslations({});
     }
+
+    // Re-render fully, THEN lift overlay so there's zero gap
     reRenderMarket();
+    hideMarketTranslateOverlay();
+    _translationInProgress = false;
 }
 
 /* ══════════════════════════════════════════════
@@ -107,18 +213,23 @@ async function loadAllMarkets() {
 
         hideLoading();
         populateCityDropdown();
-        renderMarketGrid(allMarketData);
-        buildTicker(allMarketData);
-        buildPriceTable(allMarketData);
-        window.initMarketTranslation();
 
         const firstCity = allLocations[0] || 'Delhi';
         currentChartCity = firstCity;
         const sel = document.getElementById('chartCitySelect');
         if (sel) sel.value = firstCity;
-        buildChart(allMarketData, firstCity, 'line');
-        const currentLang = localStorage.getItem('agrosmart_lang') || 'en';
-        if (currentLang !== 'en') loadTranslations(currentLang);
+
+        // Apply saved language BEFORE first render so data shows translated right away
+        const savedLang = localStorage.getItem('agrosmart_lang') || 'en';
+        if (savedLang !== 'en') {
+            // Load translations first, then render everything in one pass
+            await loadTranslations(savedLang);
+        } else {
+            renderMarketGrid(allMarketData);
+            buildTicker(allMarketData);
+            buildPriceTable(allMarketData);
+            buildChart(allMarketData, firstCity, 'line');
+        }
 
     } catch (err) {
         console.error('[Market] Load error:', err);
@@ -134,10 +245,6 @@ async function loadAllMarkets() {
     }
 }
 
-/**
- * Show a small badge telling the user whether prices are
- * live from AGMARKNET or from MSP reference data.
- */
 function updateDataSourceBadge(liveCount, staticCount) {
     const badge = document.getElementById('dataSourceBadge');
     if (!badge) return;
@@ -438,12 +545,6 @@ function buildChart(markets, city, type) {
     else if (type === 'radar') buildRadarChart(canvas, cityData, city);
 }
 
-/* ══════════════════════════════════════════════
-   HISTORY INTERPOLATION
-   Each crop has an 8-point bi-weekly history.
-   We interpolate to 30 daily labels for a smooth
-   trend line.
-══════════════════════════════════════════════ */
 function interpolateHistory(history, targetLen) {
     if (!history || history.length === 0) return new Array(targetLen).fill(0);
     if (history.length >= targetLen) return history.slice(0, targetLen);
@@ -790,11 +891,6 @@ function buildPriceTable(markets) {
     }
 }
 
-/* ══════════════════════════════════════════════
-   RE-RENDER ON LANGUAGE CHANGE
-   Called by your global language switcher after
-   loadTranslations() completes.
-══════════════════════════════════════════════ */
 function reRenderMarket() {
     if (Object.keys(allMarketData).length === 0) return;
 
@@ -810,15 +906,7 @@ function reRenderMarket() {
     buildChart(allMarketData, currentChartCity, activeChartType);
 }
 
-/* ──────────────────────────────────────────────
-   Patch into global reRenderDynamic hook so the
-   main language switcher triggers market re-render.
-────────────────────────────────────────────── */
-;(function patchReRender() {
-    const prev = typeof window.reRenderDynamic === 'function'
-        ? window.reRenderDynamic : null;
-    window.reRenderDynamic = function () {
-        if (prev) prev();
-        reRenderMarket();
-    };
-})();
+document.addEventListener('langChanged', (e) => {
+    const lang = e.detail?.lang || 'en';
+    loadTranslations(lang);
+});
