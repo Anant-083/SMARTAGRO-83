@@ -1,10 +1,3 @@
-/* ═══════════════════════════════════════════════
-   translations.js — SmartAgro
-   All 23 Indian languages — full static UI strings
-   + translated dynamic data (pests, pesticides,
-     crops, alerts, risk labels)
-═══════════════════════════════════════════════ */
-
 const LANGUAGES = [
     { code: 'en', name: 'English', flag: '🇬🇧', label: 'EN' },
     { code: 'hi', name: 'हिन्दी (Hindi)', flag: '🇮🇳', label: 'HI' },
@@ -490,6 +483,8 @@ const T = {
         quick_alerts: 'సక్రియ హెచ్చరికలు చూడండి',
         quick_alerts_sub: 'మీ ప్రాంతానికి వాతావరణ & తెగులు హెచ్చరికలు',
         footer_text: 'AI-ఆధారిత వ్యవసాయంతో రైతులను సాధికారత పరచడం',
+        diagnose_title: 'పంట వ్యాధి గుర్తింపు',
+        diagnose_subtitle: 'తక్షణ AI ఆధారిత నిర్ధారణ కోసం మీ ప్రభావిత పంట ఫోటోను అప్‌లోడ్ చేయండి లేదా తీయండి',
         upload_title: 'మీ పంట చిత్రాన్ని ఇక్కడ వదలండి',
         btn_upload: 'ఫోటో అప్‌లోడ్ చేయండి',
         btn_camera: 'ఫోటో తీయండి',
@@ -563,6 +558,8 @@ const T = {
         quick_market: 'बाजारभाव तपासा',
         quick_alerts: 'सक्रिय सतर्कता पहा',
         footer_text: 'AI-संचालित शेतीने शेतकऱ्यांना सक्षम बनवणे',
+        diagnose_title: 'पीक रोग ओळखकर्ता',
+        diagnose_subtitle: 'त्वरित AI-आधारित निदानासाठी तुमच्या प्रभावित पिकाचा फोटो अपलोड करा किंवा काढा',
         upload_title: 'येथे तुमच्या पिकाचे चित्र टाका',
         btn_upload: 'फोटो अपलोड करा',
         btn_camera: 'फोटो घ्या',
@@ -635,6 +632,8 @@ const T = {
         quick_market: 'சந்தை விலைகளை சரிபாருங்கள்',
         quick_alerts: 'செயலில் உள்ள எச்சரிக்கைகளை பாருங்கள்',
         footer_text: 'AI-இயங்கும் விவசாயத்தால் விவசாயிகளை மேம்படுத்துதல்',
+        diagnose_title: 'பயிர் நோய் கண்டறிதல் கருவி',
+        diagnose_subtitle: 'உடனடி AI-இயங்கும் கண்டறிதலுக்கு உங்கள் பாதிக்கப்பட்ட பயிரின் புகைப்படத்தைப் பதிவேற்றுங்கள் அல்லது எடுங்கள்',
         upload_title: 'உங்கள் பயிர் படத்தை இங்கே போடுங்கள்',
         btn_upload: 'புகைப்படம் பதிவேற்று',
         btn_camera: 'புகைப்படம் எடு',
@@ -702,6 +701,8 @@ const T = {
         quick_market: 'બજાર ભાવ તપાસો',
         quick_alerts: 'સક્રિય ચેતવણીઓ જુઓ',
         footer_text: 'AI-સંચાલિત ખેતી સાથે ખેડૂતોને સક્ષમ બનાવવા',
+        diagnose_title: 'પાક રોગ શોધક',
+        diagnose_subtitle: 'ત્વરિત AI-સંચાલિત નિદાન માટે તમારા અસરગ્રસ્ત પાકનો ફોટો અપલોડ કરો અથવા લો',
         upload_title: 'અહીં તમારા પાકની છબી મૂકો',
         btn_upload: 'ફોટો અપલોડ કરો',
         btn_camera: 'ફોટો લો',
@@ -768,6 +769,8 @@ const T = {
         quick_market: 'ಮಾರುಕಟ್ಟೆ ಬೆಲೆ ಪರಿಶೀಲಿಸಿ',
         quick_alerts: 'ಸಕ್ರಿಯ ಎಚ್ಚರಿಕೆಗಳು ನೋಡಿ',
         footer_text: 'AI-ಚಾಲಿತ ನಿಖರ ಕೃಷಿಯಿಂದ ರೈತರನ್ನು ಸಶಕ್ತಗೊಳಿಸುವುದು',
+        diagnose_title: 'ಬೆಳೆ ರೋಗ ಪತ್ತೆಕಾರಕ',
+        diagnose_subtitle: 'ತ್ವರಿತ AI-ಚಾಲಿತ ರೋಗ ಪತ್ತೆಗಾಗಿ ನಿಮ್ಮ ಬಾಧಿತ ಬೆಳೆಯ ಫೋಟೋ ಅಪ್‌ಲೋಡ್ ಮಾಡಿ ಅಥವಾ ತೆಗೆಯಿರಿ',
         upload_title: 'ಇಲ್ಲಿ ನಿಮ್ಮ ಬೆಳೆ ಚಿತ್ರ ಹಾಕಿ',
         btn_upload: 'ಫೋಟೋ ಅಪ್‌ಲೋಡ್ ಮಾಡಿ',
         btn_camera: 'ಫೋಟೋ ತೆಗೆಯಿರಿ',
@@ -834,6 +837,8 @@ const T = {
         quick_market: 'വിപണി വില പരിശോധിക്കുക',
         quick_alerts: 'സജീവ മുന്നറിയിപ്പുകൾ കാണുക',
         footer_text: 'AI-ചലിതമായ കൃഷിയിലൂടെ കർഷകരെ ശക്തിപ്പെടുത്തുക',
+        diagnose_title: 'വിള രോഗ കണ്ടെത്തൽ ഉപകരണം',
+        diagnose_subtitle: 'തൽക്ഷണ AI-അധിഷ്ഠിത രോഗനിർണ്ണയത്തിന് നിങ്ങളുടെ ബാധിച്ച വിളയുടെ ഫോട്ടോ അപ്‌ലോഡ് ചെയ്യുക അല്ലെങ്കിൽ എടുക്കുക',
         upload_title: 'ഇവിടെ നിങ്ങളുടെ വിള ചിത്രം ഇടുക',
         btn_upload: 'ഫോട്ടോ അപ്‌ലോഡ് ചെയ്യുക',
         btn_camera: 'ഫോട്ടോ എടുക്കുക',
@@ -904,6 +909,8 @@ const T = {
         quick_market: 'ਮੰਡੀ ਭਾਅ ਦੇਖੋ',
         quick_alerts: 'ਸਰਗਰਮ ਚੇਤਾਵਨੀਆਂ ਦੇਖੋ',
         footer_text: 'AI-ਸੰਚਾਲਿਤ ਖੇਤੀ ਨਾਲ ਕਿਸਾਨਾਂ ਨੂੰ ਸਸ਼ਕਤ ਕਰਨਾ',
+        diagnose_title: 'ਫਸਲ ਰੋਗ ਖੋਜੀ',
+        diagnose_subtitle: 'ਤੁਰੰਤ AI-ਸੰਚਾਲਿਤ ਜਾਂਚ ਲਈ ਆਪਣੀ ਪ੍ਰਭਾਵਿਤ ਫਸਲ ਦੀ ਫੋਟੋ ਅਪਲੋਡ ਕਰੋ ਜਾਂ ਲਓ',
         upload_title: 'ਇੱਥੇ ਆਪਣੀ ਫਸਲ ਦੀ ਤਸਵੀਰ ਪਾਓ',
         btn_upload: 'ਫੋਟੋ ਅਪਲੋਡ ਕਰੋ',
         btn_camera: 'ਫੋਟੋ ਲਓ',
@@ -992,6 +999,8 @@ const T = {
         section_advisory: 'ଫସଲ ପରାମର୍ଶ କ୍ୟାଲେଣ୍ଡର',
         section_quick: 'ତ୍ୱରିତ କ୍ରିୟା',
         footer_text: 'AI-ଚାଳିତ କୃଷି ସହ କୃଷକଙ୍କୁ ସଶକ୍ତ କରିବା',
+        diagnose_title: 'ଫସଲ ରୋଗ ଚିହ୍ନଟକାରୀ',
+        diagnose_subtitle: 'ତୁରନ୍ତ AI-ଚାଳିତ ନିର୍ଣ୍ଣୟ ପାଇଁ ଆପଣଙ୍କ ପ୍ରଭାବିତ ଫସଲର ଫଟୋ ଅପଲୋଡ କରନ୍ତୁ କିମ୍ବା ଉଠାନ୍ତୁ',
         upload_title: 'ଏଠାରେ ଆପଣଙ୍କ ଫସଲ ଚିତ୍ର ଛାଡ଼ନ୍ତୁ',
         btn_upload: 'ଫଟୋ ଅପଲୋଡ',
         btn_camera: 'ଫଟୋ ଉଠାନ୍ତୁ',
@@ -1064,6 +1073,8 @@ const T = {
         filter_all: 'সকলো',
         no_alerts_title: 'সকলো ঠিক! কোনো সক্ৰিয় সতৰ্কবাৰ্তা নাই',
         footer_text: 'AI-চালিত কৃষিৰে কৃষকসকলক শক্তিশালী কৰা',
+        diagnose_title: 'শস্য ৰোগ চিনাক্তকাৰী',
+        diagnose_subtitle: 'তৎক্ষণাৎ AI-চালিত নিৰ্ণয়ৰ বাবে আপোনাৰ প্ৰভাৱিত শস্যৰ ফটো আপলোড কৰক বা তোলক',
         lbl_affects: 'প্ৰভাৱিত কৰে',
         lbl_active_now: '⚠ এতিয়া সক্ৰিয়',
         lbl_high_risk: 'উচ্চ বিপদ',
@@ -2206,6 +2217,7 @@ const T = {
    TRANSLATION ENGINE
 ════════════════════════════════════════════ */
 let currentLang = localStorage.getItem('agrosmart_lang') || 'en';
+window.currentLang = currentLang; // ← ADD
 
 /** Translate a key, falling back to English */
 function translate(key) {
@@ -2239,14 +2251,17 @@ function applyTranslations() {
 
 function setLanguage(code) {
     currentLang = code;
+    window.currentLang = code; // ← ADD
     localStorage.setItem('agrosmart_lang', code);
     applyTranslations();
     updateLangUI();
+    document.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: code } })); // ← ADD
     document.querySelectorAll('.lang-option').forEach(o => {
         o.classList.toggle('active', o.dataset.code === code);
     });
     // Re-render dynamic sections if they are loaded
     if (typeof reRenderDynamic === 'function') reRenderDynamic();
+    if (typeof applyDashboardLanguage === 'function') applyDashboardLanguage(code);
 }
 
 function updateLangUI() {
