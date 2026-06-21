@@ -603,6 +603,7 @@ h1,h2,h3,h4 { font-family: 'Syne', sans-serif; line-height: 1.2; }
   /* prevent lang dropdown from overflowing off screen */
   .lang-dropdown { right: 0; left: auto; width: min(280px, 90vw); }
   .btn-primary, .btn-secondary { font-size: 0.85rem; padding: 10px 18px; }
+}
 
 /* ═══════════════════════════════════
    MOBILE BOTTOM NAVIGATION BAR
