@@ -693,9 +693,8 @@ Respond ONLY with valid JSON, no markdown or backticks:
 }}{lang_instruction}"""
 
     vision_models = [
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "meta-llama/llama-4-maverick-17b-128e-instruct",
-    ]
+    "qwen/qwen3.6-27b",
+]
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
 
     for model in vision_models:
