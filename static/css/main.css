@@ -93,6 +93,117 @@ body.light-theme .hero-grid {
   color: var(--amber);
   background: rgba(251,191,36,0.1);
 }
+
+/* ── Install App Button ──────────────────────────────── */
+.install-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  border: 1px solid var(--green);
+  color: var(--green);
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-family: inherit;
+  transition: var(--trans);
+  cursor: pointer;
+  flex-shrink: 0;
+  animation: installPulse 2.4s ease-in-out infinite;
+}
+.install-btn:hover {
+  background: var(--green-glow);
+  box-shadow: 0 0 16px rgba(74,222,128,0.25);
+  transform: translateY(-1px);
+}
+.install-btn:disabled { opacity: 0.6; cursor: not-allowed; animation: none; }
+@keyframes installPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(74,222,128,0.25); }
+  50%      { box-shadow: 0 0 0 5px rgba(74,222,128,0); }
+}
+
+/* ── Install Instructions Modal (injected by main.js) ─── */
+.install-modal-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(10,16,12,0.6);
+  backdrop-filter: blur(3px);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.2s ease;
+  padding: 20px;
+}
+.install-modal-overlay.visible { opacity: 1; pointer-events: all; }
+.install-modal-box {
+  background: var(--card);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  padding: 28px 26px;
+  max-width: 360px;
+  width: 100%;
+  text-align: center;
+  box-shadow: var(--shadow-lg);
+  animation: installModalPop 0.25s ease;
+}
+@keyframes installModalPop {
+  from { transform: scale(0.92); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+.install-modal-icon {
+  width: 60px; height: 60px;
+  border-radius: 50%;
+  background: var(--green-glow);
+  border: 1px solid rgba(74,222,128,0.3);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem;
+  color: var(--green);
+  margin: 0 auto 16px;
+}
+.install-modal-box h3 { font-size: 1.05rem; margin-bottom: 10px; }
+.install-modal-steps {
+  list-style: none;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0 20px;
+}
+.install-modal-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.82rem;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.install-modal-steps .ims-num {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--green-glow);
+  border: 1px solid rgba(74,222,128,0.3);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.68rem; font-weight: 700; color: var(--green);
+  flex-shrink: 0;
+}
+.install-modal-box p.install-modal-note {
+  font-size: 0.76rem;
+  color: var(--text-3);
+  margin-bottom: 18px;
+}
+.install-modal-close {
+  width: 100%;
+  padding: 11px;
+  background: var(--green-2);
+  color: #000;
+  font-weight: 700;
+  font-size: 0.85rem;
+  border-radius: var(--radius-sm);
+  border: none;
+  cursor: pointer;
+  transition: var(--trans);
+}
+.install-modal-close:hover { background: var(--green); }
 /* ── Reset ───────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -592,6 +703,8 @@ h1,h2,h3,h4 { font-family: 'Syne', sans-serif; line-height: 1.2; }
   .brand-text { font-size: 1.1rem; }
   .nav-actions { gap: 6px; }
   .lang-btn span { display: none; }
+  .install-btn span { display: none; }
+  .install-btn { width: 34px; height: 34px; padding: 0; justify-content: center; }
   .lang-btn { padding: 7px 10px; }
   .theme-toggle { width: 34px; height: 34px; }
   .toast { bottom: 16px; right: 16px; left: 16px; max-width: none; }
