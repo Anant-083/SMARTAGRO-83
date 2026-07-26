@@ -222,7 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
     observeAnimations();
 
     // ── Restore saved language and notify diagnose.js ──
-    const savedLang = localStorage.getItem('agrosmart_lang') || 'en';
+    const savedLang = localStorage.getItem('smartagro_lang') || 'en';
     window.currentLang = savedLang;
     if (savedLang !== 'en') {
         document.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: savedLang } }));
@@ -277,3 +277,121 @@ if ('serviceWorker' in navigator) {
             .catch(err => console.error('SW registration failed:', err));
     });
 }
+
+/* ══════════════════════════════════════════════
+   INSTALL APP — works on desktop & mobile,
+   available from the navbar on every page.
+══════════════════════════════════════════════ */
+let deferredInstallPrompt = null;
+
+function isAppStandalone() {
+    return window.matchMedia('(display-mode: standalone)').matches ||
+        window.navigator.standalone === true; // iOS Safari flag
+}
+
+function isIosDevice() {
+    return /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+}
+
+function ensureInstallModalStyles() {
+    // Styles live in main.css (.install-modal-*); nothing to inject here,
+    // this hook exists in case the page loads main.js before main.css.
+}
+
+function showInstallModal({ icon, title, steps, note }) {
+    let overlay = document.getElementById('installModalOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'installModalOverlay';
+        overlay.className = 'install-modal-overlay';
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', e => { if (e.target === overlay) hideInstallModal(); });
+    }
+    overlay.innerHTML = `
+      <div class="install-modal-box">
+        <div class="install-modal-icon"><i class="fas ${icon}"></i></div>
+        <h3>${title}</h3>
+        <ul class="install-modal-steps">
+          ${steps.map((s, i) => `<li><span class="ims-num">${i + 1}</span><span>${s}</span></li>`).join('')}
+        </ul>
+        ${note ? `<p class="install-modal-note">${note}</p>` : ''}
+        <button class="install-modal-close" onclick="hideInstallModal()">Got it</button>
+      </div>`;
+    requestAnimationFrame(() => overlay.classList.add('visible'));
+}
+
+function hideInstallModal() {
+    const overlay = document.getElementById('installModalOverlay');
+    if (overlay) overlay.classList.remove('visible');
+}
+
+// Chrome/Edge/Android fire this when the app is installable.
+// We stash the event so it can be triggered later from our own button
+// instead of the browser's own mini-infobar.
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+});
+
+window.addEventListener('appinstalled', () => {
+    deferredInstallPrompt = null;
+    showToast('✅ SmartAgro installed on your device!', 'success');
+    const btn = document.getElementById('installBtn');
+    if (btn) btn.style.display = 'none';
+});
+
+function setupInstallButton() {
+    const btn = document.getElementById('installBtn');
+    if (!btn) return;
+
+    // Already running as an installed app — nothing to offer.
+    if (isAppStandalone()) {
+        btn.style.display = 'none';
+        return;
+    }
+
+    btn.addEventListener('click', async () => {
+        // Case 1: browser has a native install prompt ready (Chrome/Edge,
+        // desktop or Android).
+        if (deferredInstallPrompt) {
+            btn.disabled = true;
+            deferredInstallPrompt.prompt();
+            const { outcome } = await deferredInstallPrompt.userChoice;
+            if (outcome !== 'accepted') {
+                showToast('Installation cancelled.', 'warning');
+            }
+            deferredInstallPrompt = null;
+            btn.disabled = false;
+            return;
+        }
+
+        // Case 2: iOS Safari has no install prompt API — show manual steps.
+        if (isIosDevice()) {
+            showInstallModal({
+                icon: 'fa-share-from-square',
+                title: 'Install SmartAgro on iPhone/iPad',
+                steps: [
+                    'Tap the <strong>Share</strong> icon in Safari\'s toolbar.',
+                    'Scroll down and tap <strong>Add to Home Screen</strong>.',
+                    'Tap <strong>Add</strong> in the top-right corner.'
+                ],
+                note: 'SmartAgro will then open full-screen from your Home Screen, just like a native app.'
+            });
+            return;
+        }
+
+        // Case 3: Desktop/Android browser without beforeinstallprompt
+        // support yet (e.g. Firefox), or the prompt hasn't fired.
+        showInstallModal({
+            icon: 'fa-circle-info',
+            title: 'Install SmartAgro',
+            steps: [
+                'Open this site in <strong>Chrome</strong> or <strong>Edge</strong> for one-tap install.',
+                'Or use your browser\'s menu (⋮ or Share) and look for <strong>Install App</strong> / <strong>Add to Home Screen</strong>.'
+            ],
+            note: 'Install support depends on your browser.'
+        });
+    });
+}
+
+document.addEventListener('DOMContentLoaded', setupInstallButton);
