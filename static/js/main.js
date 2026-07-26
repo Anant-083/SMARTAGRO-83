@@ -222,7 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
     observeAnimations();
 
     // ── Restore saved language and notify diagnose.js ──
-    const savedLang = localStorage.getItem('smartagro_lang') || 'en';
+    const savedLang = localStorage.getItem('agrosmart_lang') || 'en';
     window.currentLang = savedLang;
     if (savedLang !== 'en') {
         document.dispatchEvent(new CustomEvent('langChanged', { detail: { lang: savedLang } }));
