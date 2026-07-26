@@ -714,6 +714,7 @@ Respond ONLY with valid JSON, no markdown or backticks:
                 ],
                 "temperature": 0.2,
                 "max_tokens":  1400,
+                "reasoning_effort": "none",
             }
             resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=45)
             if resp.status_code in (429, 500, 503):
