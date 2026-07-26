@@ -778,7 +778,9 @@ document.addEventListener('DOMContentLoaded', () => {
         loadDiagnoseTranslations(lang);
     }
 });
-
+document.addEventListener('langChanged', () => {
+  if (window._lastDiagnosisData) buildDiagnosisHTML(window._lastDiagnosisData);
+});
 /* ══════════════════════════════════════════════
    IMAGE COLOUR HINTS FOR GROQ
 ══════════════════════════════════════════════ */
