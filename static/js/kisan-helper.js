@@ -574,6 +574,45 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         }
     }
 
+    // Chrome (desktop + many Android builds) silently halts a long
+    // SpeechSynthesisUtterance around the ~15s mark unless it's periodically
+    // nudged with pause()/resume(). Splitting the reply into sentence-level
+    // chunks and running a keep-alive nudge fixes the "reading stops midway"
+    // problem across languages/devices.
+    let speechToken = 0;
+    let speechKeepAliveTimer = null;
+
+    function clearKeepAlive() {
+        if (speechKeepAliveTimer) { clearInterval(speechKeepAliveTimer); speechKeepAliveTimer = null; }
+    }
+
+    function startKeepAlive() {
+        clearKeepAlive();
+        speechKeepAliveTimer = setInterval(() => {
+            const synth = window.speechSynthesis;
+            if (synth && synth.speaking && !synth.paused) {
+                synth.pause();
+                synth.resume();
+            }
+        }, 9000);
+    }
+
+    function splitIntoSpeechChunks(text) {
+        // Sentence-boundary split that also understands Devanagari/Urdu punctuation.
+        const parts = text.match(/[^.!?।؟]+[.!?।؟]*/g) || [text];
+        const chunks = [];
+        let buffer = '';
+        for (const part of parts) {
+            buffer += part;
+            if (buffer.trim().length >= 180 || /[.!?।؟]\s*$/.test(part.trim())) {
+                chunks.push(buffer.trim());
+                buffer = '';
+            }
+        }
+        if (buffer.trim()) chunks.push(buffer.trim());
+        return chunks.filter(Boolean);
+    }
+
     function speakText(text, msgId) {
         if (!window.speechSynthesis) {
             alert('Voice playback is not supported in this browser.');
@@ -581,6 +620,10 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         }
         msgTextById[msgId] = text;
         window.speechSynthesis.cancel();
+        clearKeepAlive();
+        speechToken++;
+        const myToken = speechToken;
+
         if (speakingMsgId && speakingMsgId !== msgId) setSpeakBtnState(speakingMsgId, 'idle');
         if (pausedMsgId && pausedMsgId !== msgId) setSpeakBtnState(pausedMsgId, 'idle');
         pausedMsgId = null;
@@ -598,33 +641,55 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
             return;
         }
 
-        const utter = new SpeechSynthesisUtterance(clean);
-        utter.lang = voice.lang;
-        utter.rate = 0.88;
-        utter.pitch = 1;
-        utter.volume = 1;
-        utter.voice = voice;
+        const chunks = splitIntoSpeechChunks(clean);
+        let chunkIndex = 0;
 
-        utter.onstart = () => {
-            speakingMsgId = msgId;
-            setSpeakBtnState(msgId, 'speaking');
-            updateFab('speaking');
-        };
-        utter.onend = () => {
-            if (speakingMsgId === msgId) speakingMsgId = null;
-            setSpeakBtnState(msgId, 'idle');
-            updateFab('idle');
-        };
-        utter.onerror = () => {
-            if (speakingMsgId === msgId) speakingMsgId = null;
-            if (pausedMsgId === msgId) pausedMsgId = null;
-            setSpeakBtnState(msgId, 'idle');
-            updateFab('idle');
-        };
-        setTimeout(() => window.speechSynthesis.speak(utter), 30);
+        function speakNextChunk() {
+            if (myToken !== speechToken) return; // superseded by a newer speak/stop call
+            if (chunkIndex >= chunks.length) {
+                clearKeepAlive();
+                if (speakingMsgId === msgId) speakingMsgId = null;
+                setSpeakBtnState(msgId, 'idle');
+                updateFab('idle');
+                return;
+            }
+            const utter = new SpeechSynthesisUtterance(chunks[chunkIndex]);
+            utter.lang = voice.lang;
+            utter.rate = 0.88;
+            utter.pitch = 1;
+            utter.volume = 1;
+            utter.voice = voice;
+
+            utter.onstart = () => {
+                speakingMsgId = msgId;
+                setSpeakBtnState(msgId, 'speaking');
+                updateFab('speaking');
+                startKeepAlive();
+            };
+            utter.onend = () => {
+                chunkIndex++;
+                speakNextChunk();
+            };
+            utter.onerror = (ev) => {
+                if (myToken !== speechToken) return;
+                clearKeepAlive();
+                if (!utter._retried && ev.error !== 'canceled' && ev.error !== 'interrupted') {
+                    // Transient engine glitch — retry this chunk once before moving on.
+                    utter._retried = true;
+                    setTimeout(() => { if (myToken === speechToken) window.speechSynthesis.speak(utter); }, 250);
+                    return;
+                }
+                chunkIndex++;
+                speakNextChunk();
+            };
+            window.speechSynthesis.speak(utter);
+        }
+
+        setTimeout(speakNextChunk, 30);
     }
 
     function pauseSpeaking(msgId) {
+        clearKeepAlive();
         if (window.speechSynthesis) {
             try { window.speechSynthesis.pause(); } catch (e) {}
         }
@@ -642,6 +707,7 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         speakingMsgId = msgId;
         pausedMsgId = null;
         updateFab('speaking');
+        startKeepAlive();
 
         setTimeout(() => {
             if (speakingMsgId === msgId && synth.paused) {
@@ -652,6 +718,8 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
     }
 
     function stopSpeaking() {
+        speechToken++;
+        clearKeepAlive();
         if (window.speechSynthesis) try { window.speechSynthesis.cancel(); } catch (e) {}
         if (speakingMsgId) setSpeakBtnState(speakingMsgId, 'idle');
         if (pausedMsgId) setSpeakBtnState(pausedMsgId, 'idle');
@@ -1136,6 +1204,54 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         recordTimerInterval = null;
     }
 
+    /* ── Live captions while speaking (best-effort) ──
+       Uses the browser's built-in SpeechRecognition to show words in the
+       input box in real time as the farmer talks. The final, more accurate
+       transcript still comes from the /api/stt backend call in
+       handleRecordingStop() once recording stops — this only adds a live
+       preview and is skipped silently if the browser/language doesn't
+       support it, so the mic keeps working exactly as before either way. */
+    let liveRecognition = null;
+
+    function getRecognitionLang(langCode) {
+        return VOICE_LANGS[langCode] || 'en-IN';
+    }
+
+    function startLiveCaption() {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) return;
+        try {
+            liveRecognition = new SR();
+            liveRecognition.lang = getRecognitionLang(getAppLang());
+            liveRecognition.continuous = true;
+            liveRecognition.interimResults = true;
+            liveRecognition.onresult = (event) => {
+                let transcript = '';
+                for (let i = 0; i < event.results.length; i++) {
+                    transcript += event.results[i][0].transcript;
+                }
+                const input = getInput();
+                if (input) input.value = transcript;
+            };
+            // Best-effort only — real transcription comes from the server STT call.
+            liveRecognition.onerror = () => {};
+            liveRecognition.start();
+        } catch (e) {
+            liveRecognition = null;
+        }
+    }
+
+    function stopLiveCaption() {
+        if (liveRecognition) {
+            try {
+                liveRecognition.onresult = null;
+                liveRecognition.onerror = null;
+                liveRecognition.stop();
+            } catch (e) {}
+            liveRecognition = null;
+        }
+    }
+
     window.toggleKisanMic = function() {
         if (isRecording) { stopRecording(); return; }
         if (isTranscribing) return;
@@ -1169,16 +1285,21 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         mediaRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) audioChunks.push(e.data); };
         mediaRecorder.onstop = handleRecordingStop;
 
+        const input = getInput();
+        if (input) input.value = '';
+
         mediaRecorder.start();
         isRecording = true;
         setMicState('recording');
         startRecordTimer();
+        startLiveCaption();
     }
 
     function stopRecording() {
         if (!mediaRecorder || !isRecording) return;
         isRecording = false;
         stopRecordTimer();
+        stopLiveCaption();
         try { mediaRecorder.stop(); } catch (e) { console.error('[KisanMic]', e); }
         if (mediaStream) {
             mediaStream.getTracks().forEach(t => t.stop());
