@@ -492,11 +492,46 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         doi: '🌾 नमस्ते किसान भाई! मैं SmartAgro किसान सहायक आं। मौसम, फसल, बजार भाव बारै पुच्छो।',
     };
 
-    /* ── Voice helpers (from chatbot.js) ────── */
+    /* ── Voice helpers (merged from chatbot.js) ─────────────────────────
+       chatbot.js's speaker worked reliably because getBestVoice() always
+       falls back to *some* voice (English if nothing else) instead of
+       giving up. kisan-helper's old version only checked a short list of
+       exact/prefix language tags and returned null — and null meant
+       "silently do nothing" for every language that isn't in
+       VOICE_FALLBACK_CHAIN. That's the bug: on most desktop/Android
+       browsers there's simply no installed hi-IN/bn-IN/... voice, so the
+       speak button did nothing. This version guarantees a voice is always
+       found (native if available, else the closest available match). ── */
     function loadVoices() { availableVoices = window.speechSynthesis ? window.speechSynthesis.getVoices() : []; }
     if (window.speechSynthesis) {
         loadVoices();
-        window.speechSynthesis.onvoiceschanged = loadVoices;
+        // addEventListener (not "onvoiceschanged =") so this never gets
+        // silently overwritten if any other script also listens for it.
+        window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+        // Some browsers (notably iOS Safari / some Android WebViews) never
+        // fire 'voiceschanged' and only populate the list a beat after
+        // page load — poll briefly as a safety net.
+        let voicePollTries = 0;
+        const voicePoll = setInterval(() => {
+            voicePollTries++;
+            loadVoices();
+            if (availableVoices.length || voicePollTries > 20) clearInterval(voicePoll);
+        }, 250);
+    }
+
+    // Wait (briefly) for voices to be ready before the very first speak
+    // attempt, instead of racing an empty list and giving up.
+    function ensureVoicesReady(callback) {
+        if (availableVoices.length || !window.speechSynthesis) { callback(); return; }
+        let tries = 0;
+        const poll = setInterval(() => {
+            tries++;
+            loadVoices();
+            if (availableVoices.length || tries > 12) {
+                clearInterval(poll);
+                callback();
+            }
+        }, 150);
     }
 
     const VOICE_FALLBACK_CHAIN = {
@@ -513,24 +548,61 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
     };
 
     function getBestVoice(langCode) {
-        if (!availableVoices.length) return null;
+        if (!availableVoices.length) return null; // truly no voices on this device at all
+
         const primary = VOICE_LANGS[langCode] || 'en-IN';
         const chain = VOICE_FALLBACK_CHAIN[langCode] || [primary];
 
+        // 1) Exact tag match (e.g. 'hi-IN')
         for (const tag of chain) {
             const exact = availableVoices.find(v => v.lang === tag);
             if (exact) return exact;
         }
+        // 2) Prefix match (e.g. any voice starting with 'hi')
         for (const tag of chain) {
             const prefix = tag.split('-')[0];
             const partial = availableVoices.find(v => v.lang.startsWith(prefix));
             if (partial) return partial;
         }
-        return null;
+        // 3) chatbot.js-style universal fallback: this is the part
+        //    kisan-helper was missing. Rather than returning null (and the
+        //    speak button doing nothing), fall back to an Indian-English
+        //    voice, then any English voice, then literally whatever voice
+        //    the device has — so the speaker always plays something.
+        if (langCode !== 'en') {
+            const enIN = availableVoices.find(v => v.lang === 'en-IN');
+            if (enIN) return enIN;
+        }
+        const anyEn = availableVoices.find(v => v.lang.startsWith('en'));
+        if (anyEn) return anyEn;
+
+        return availableVoices[0] || null;
     }
 
-    function hasUsableVoice(langCode) {
-        return getBestVoice(langCode) !== null;
+    // True only when a *native* voice for this language exists (used to
+    // decide whether to show a "reading in English" hint, not to gate
+    // whether speaking happens at all).
+    function hasNativeVoice(langCode) {
+        const primary = VOICE_LANGS[langCode] || 'en-IN';
+        const chain = VOICE_FALLBACK_CHAIN[langCode] || [primary];
+        return chain.some(tag =>
+            availableVoices.some(v => v.lang === tag || v.lang.startsWith(tag.split('-')[0]))
+        );
+    }
+
+    function showKisanToast(msg) {
+        if (typeof window.showToast === 'function') {
+            window.showToast(msg, 'warning', 3000);
+            return;
+        }
+        const el = document.createElement('div');
+        el.textContent = msg;
+        el.style.cssText = 'position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom,0px));' +
+            'transform:translateX(-50%);background:#1a2a1c;color:#e8f5e9;border:1px solid rgba(74,222,128,.3);' +
+            'padding:9px 16px;border-radius:20px;font-size:.78rem;z-index:10000;max-width:86vw;text-align:center;' +
+            'box-shadow:0 4px 20px rgba(0,0,0,.4);';
+        document.body.appendChild(el);
+        setTimeout(() => el.remove(), 3000);
     }
 
     function cleanTextForSpeech(text) {
@@ -583,7 +655,10 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
     let speechKeepAliveTimer = null;
 
     function clearKeepAlive() {
-        if (speechKeepAliveTimer) { clearInterval(speechKeepAliveTimer); speechKeepAliveTimer = null; }
+        if (speechKeepAliveTimer) {
+            clearInterval(speechKeepAliveTimer);
+            speechKeepAliveTimer = null;
+        }
     }
 
     function startKeepAlive() {
@@ -613,12 +688,21 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         return chunks.filter(Boolean);
     }
 
+    let voiceFallbackNoticeShown = {}; // one soft hint per language per session, not a hard failure
+
     function speakText(text, msgId) {
         if (!window.speechSynthesis) {
             alert('Voice playback is not supported in this browser.');
             return;
         }
         msgTextById[msgId] = text;
+
+        // Voices sometimes aren't loaded yet on the very first tap — wait
+        // briefly instead of failing outright.
+        ensureVoicesReady(() => _speakTextNow(text, msgId));
+    }
+
+    function _speakTextNow(text, msgId) {
         window.speechSynthesis.cancel();
         clearKeepAlive();
         speechToken++;
@@ -635,10 +719,15 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         const voice = getBestVoice(lang);
 
         if (!voice) {
+            // Only happens if the device truly has zero TTS voices at all.
             setSpeakBtnState(msgId, 'idle');
-            alert('Voice playback for ' + (LANG_ROMAN[lang] || lang) + ' is not available on this device yet. ' +
-                'You can still read the reply, or switch to a language with voice support.');
+            showKisanToast('Voice playback is not available on this device.');
             return;
+        }
+
+        if (lang !== 'en' && !hasNativeVoice(lang) && !voiceFallbackNoticeShown[lang]) {
+            voiceFallbackNoticeShown[lang] = true;
+            showKisanToast('No ' + (LANG_ROMAN[lang] || lang) + ' voice on this device — reading with the closest available voice.');
         }
 
         const chunks = splitIntoSpeechChunks(clean);
@@ -1364,5 +1453,4 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         const win = document.getElementById('kisanWindow');
         if (win && win.contains(e.target) && e.touches[0].clientY - swipeStartY > 80) toggleKisan();
     }, { passive: true });
-
 })();
