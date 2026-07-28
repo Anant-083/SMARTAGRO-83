@@ -425,6 +425,8 @@ async function loadCropRecommendations(current) {
                 humidity: current.humidity,
                 rain: current.rain || 0,
                 city: current.city,
+                lat: current.lat,
+                lon: current.lon,
             })
         });
         const data = await res.json();
