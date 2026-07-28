@@ -16,7 +16,7 @@ app = Flask(__name__)
 
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 GROQ_API_KEY        = os.getenv("GROQ_API_KEY", "")
-NINJA_API_KEY       = os.getenv("NINJA_API_KEY", "")  # no longer used by /api/market (kept for backward-compat only)
+NINJA_API_KEY       = os.getenv("NINJA_API_KEY", "")
 DEBUG_MODE          = os.getenv("FLASK_DEBUG", "0") == "1"
 
 _translation_cache = {}
@@ -103,8 +103,6 @@ def get_weather():
         return jsonify({
             "current": {
                 "city":        current_data.get("name", "Your Location"),
-                "lat":         float(lat),
-                "lon":         float(lon),
                 "temp":        round(current_data["main"]["temp"]),
                 "feels_like":  round(current_data["main"]["feels_like"]),
                 "humidity":    current_data["main"]["humidity"],
@@ -123,115 +121,20 @@ def get_weather():
 
 
 # ─── Crop Recommendations ────────────────────────────────────────────────────
-_crop_ai_cache = {}
-CROP_AI_CACHE_TTL_SEC = 3 * 60 * 60  # 3 hours — same city/season/weather bucket repeats a lot in a day
-
-
-def ai_recommend_crops(city, lat, lon, temp, humidity, rain, season):
-    """Ask Groq for crops genuinely suited to THIS location's climate, soil
-    region and season — instead of matching generic temp/humidity bands
-    against a fixed 8-crop table (which produced near-identical results for
-    any two places with similar weather, regardless of state/soil/region).
-    Returns None on any failure so the caller can fall back to the
-    rule-based recommend_crops() and the dashboard never breaks."""
-    if not GROQ_API_KEY:
-        return None
-
-    cache_key = f"{city}|{round((lat or 0), 1)}|{round((lon or 0), 1)}|{season}|{round(temp/3)*3}|{round(humidity/10)*10}"
-    now = time.monotonic()
-    cached = _crop_ai_cache.get(cache_key)
-    if cached and (now - cached[0]) < CROP_AI_CACHE_TTL_SEC:
-        return cached[1]
-
-    prompt = f"""You are an agronomist advising a farmer in India.
-
-Location: {city or "an unspecified Indian town"} (approx. lat {lat}, lon {lon})
-Current season: {season}
-Current weather right now: {temp} deg C, {humidity}% humidity, {rain} mm recent rainfall
-
-Recommend the 6 crops BEST suited to THIS exact location's climate, soil
-region and season — not a generic list. Use your knowledge of Indian
-agro-climatic zones (e.g. black cotton soil across much of Maharashtra,
-alluvial soil in the Indo-Gangetic plain, laterite soil along the Western
-Ghats/coastal belts, arid/sandy soil in Rajasthan, red soil in the Deccan
-plateau, etc.) to pick realistic, regionally-appropriate crops that a real
-agricultural officer would suggest for this place right now, ranked by
-suitability.
-
-Respond ONLY with a JSON object, no preamble, no markdown fences, matching
-exactly this shape:
-{{
-  "crops": [
-    {{
-      "name": "Crop name in English",
-      "icon": "one relevant emoji",
-      "match": "e.g. 92%",
-      "description": "one short sentence on why it suits this location/season",
-      "season": "Kharif (Monsoon) | Rabi (Winter) | Zaid (Summer)",
-      "water": "Low | Medium | High | Very High",
-      "yield": "e.g. 3-5 tonnes/ha",
-      "profit": "e.g. Rs45,000-65,000/ha",
-      "duration": "e.g. 90-150 days",
-      "soil": "soil type suited to this region",
-      "fertilizer": "e.g. NPK 120:60:60 kg/ha"
-    }}
-  ]
-}}"""
-
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    body = {
-        "model":       "openai/gpt-oss-120b",
-        "messages":    [{"role": "user", "content": prompt}],
-        "temperature": 0.4,
-        "max_tokens":  1500,
-        "response_format": {"type": "json_object"},
-    }
-    try:
-        resp = _post_to_groq(body, headers)
-        if resp is None or resp.status_code != 200:
-            print(f"[CropAI] Groq HTTP {getattr(resp, 'status_code', 'no-response')} for {city}")
-            return None
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
-        cleaned = re.sub(r"```(?:json)?", "", raw).replace("```", "").strip()
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        parsed = json.loads(match.group() if match else cleaned)
-        crops = parsed.get("crops")
-        if not isinstance(crops, list) or not crops:
-            return None
-        for c in crops:
-            c.setdefault("icon", "🌱")
-        _crop_ai_cache[cache_key] = (now, crops)
-        print(f"[CropAI] OK for {city}: {len(crops)} crops")
-        return crops
-    except Exception as e:
-        print(f"[CropAI] error for {city}: {e}")
-        return None
-
-
 @app.route("/api/crop-recommendations", methods=["POST"])
 def crop_recommendations():
     data     = request.json or {}
     temp     = data.get("temp", 25)
     humidity = data.get("humidity", 60)
     rain     = data.get("rain", 0)
-    city     = data.get("city", "")
-    lat      = data.get("lat")
-    lon      = data.get("lon")
     season   = get_season(datetime.now().month)
-
-    ai_crops = ai_recommend_crops(city, lat, lon, temp, humidity, rain, season)
-    if ai_crops:
-        crops, source = ai_crops, "ai"
-    else:
-        crops, source = recommend_crops(temp, humidity, rain, season), "rule_based"
-
+    crops    = recommend_crops(temp, humidity, rain, season)
     calendar = generate_advisory_calendar(crops[:3])
     return jsonify({
         "season":     season,
         "crops":      crops,
         "calendar":   calendar,
-        "pesticides": get_pesticide_guide(crops[:3]),
-        "source":     source,   # "ai" = location-aware, "rule_based" = offline fallback
+        "pesticides": get_pesticide_guide(crops[:3])
     })
 
 
@@ -314,60 +217,70 @@ def get_pesticide_guide(crops):
     return result
 
 
-# ─── Market Data — Agmarknet (Govt. of India, official) ──────────────────────
-# Data source: "Current Daily Price of Various Commodities from Various
-# Markets (Mandi)" — published by the Directorate of Marketing & Inspection,
-# Ministry of Agriculture & Farmers Welfare, via data.gov.in (open data,
-# Govt. of India). This is the SAME data Agmarknet.gov.in itself is built on
-# — it is the authoritative, official source for Indian mandi prices, unlike
-# global commodity-futures APIs (which price Chicago wheat/corn, not Indian
-# mandi produce) or hand-typed reference tables.
-#
-# Get a free personal key at https://data.gov.in (Sign Up -> My Account ->
-# API keys) and set it as DATA_GOV_API_KEY in your .env. Until you do, this
-# falls back to data.gov.in's shared public test key, which is rate-limited
-# and NOT meant for production — replace it as soon as you can.
-DATA_GOV_API_KEY = os.getenv(
-    "DATA_GOV_API_KEY",
-    "579b464db66ec23bdd000001cdd3946e44ce4aad7209ff7b23ac571b"  # data.gov.in public test key
-)
-AGMARKNET_RESOURCE_ID = "9ef84268-d588-465a-a308-a864a43d0070"
-AGMARKNET_URL = f"https://api.data.gov.in/resource/{AGMARKNET_RESOURCE_ID}"
+# ─── Market Data — API-Ninjas ─────────────────────────────────────────────────
+# API-Ninjas /v1/commodityprice returns global prices in USD/unit.
+# We convert to approx INR/quintal: (price_usd / kg_per_unit) * 100kg * USD_TO_INR
+# Each crop entry includes "crop_key" (English) so the frontend can translate it.
 
-# Agmarknet's commodity names vs. the display names SmartAgro already uses
-# in the UI/translations. Extend this as you add more crops.
-AGMARK_COMMODITY_ALIASES = {
-    "wheat": "Wheat", "rice": "Rice", "maize": "Maize (Corn)",
-    "mustard": "Mustard", "groundnut": "Groundnut", "onion": "Onion",
-    "potato": "Potato", "tomato": "Tomato", "green chilli": "Chilli",
-    "chilli": "Chilli", "sugarcane": "Sugarcane",
-    "arhar (tur/red gram)(whole)": "Arhar (Tur)", "arhar": "Arhar (Tur)",
-    "green gram (moong)(whole)": "Moong", "moong": "Moong",
-    "black gram (urad beans)(whole)": "Urad", "urad": "Urad",
-    "soyabean": "Soybean", "soybean": "Soybean", "cotton": "Cotton",
-    "jowar(sorghum)": "Jowar (Sorghum)",
-    "bajra(pearl millet/cumbu)": "Bajra (Pearl Millet)",
-    "bengal gram(gram)(whole)": "Bengal Gram (Chana)",
-    "garlic": "Garlic", "ginger(green)": "Ginger", "ginger": "Ginger",
-    "turmeric": "Turmeric", "cumin(jeera)": "Cumin (Jeera)",
-    "coriander(leaves)": "Coriander", "coriander": "Coriander",
-    "banana": "Banana", "mango": "Mango",
-}
+# (ninja_api_name, display_name_english, usd_unit, kg_per_unit)
+NINJA_COMMODITIES = [
+    ("wheat",         "Wheat",         "bushel", 27.216),
+    ("corn",          "Maize (Corn)",  "bushel", 25.401),
+    ("rice",          "Rice",          "cwt",    45.359),
+    ("soybeans",      "Soybean",       "bushel", 27.216),
+    ("cotton",        "Cotton",        "pound",   0.453),
+    ("sugar",         "Sugarcane",     "pound",   0.453),
+    ("canola",        "Mustard",       "tonne", 100.000),
+    ("palm oil",      "Palm Oil",      "tonne", 100.000),
+    ("oats",          "Oats",          "bushel", 14.515),
+    ("coffee",        "Coffee",        "pound",   0.453),
+    ("cocoa",         "Cocoa",         "tonne", 100.000),
+    ("rubber",        "Rubber",        "kilogram", 0.100),
+    ("sunflower oil", "Sunflower",     "tonne", 100.000),
+    ("soybean oil",   "Soybean Oil",   "tonne", 100.000),
+    ("soybean meal",  "Soybean Meal",  "tonne", 100.000),
+    ("linseed oil",   "Linseed",       "tonne", 100.000),
+]
 
-# Reference prices — used ONLY on the rare day a state's mandis haven't
-# reported anything yet (Agmarknet is govt.-updated once daily; occasional
-# gaps happen on holidays). Clearly tagged as "msp_fallback" so the UI badge
-# tells the farmer these are reference, not live, prices.
+USD_TO_INR = 83.5  # approximate; update as needed
+
+# MSP/market reference prices — used ONLY for crops not returned by Ninja
 MSP_FALLBACK = [
-    {"crop": "Wheat",             "price": 2275,  "change": 0.0},
-    {"crop": "Rice",              "price": 2183,  "change": 0.0},
-    {"crop": "Maize (Corn)",      "price": 2090,  "change": 0.0},
-    {"crop": "Mustard",           "price": 5650,  "change": 0.0},
-    {"crop": "Groundnut",         "price": 6377,  "change": 0.0},
-    {"crop": "Onion",             "price": 1800,  "change": 0.0},
-    {"crop": "Potato",            "price": 1200,  "change": 0.0},
-    {"crop": "Tomato",            "price": 2500,  "change": 0.0},
-    {"crop": "Bengal Gram (Chana)", "price": 5440, "change": 0.0},
+    {"crop": "Wheat",                "price": 2275,  "change":  0.8,  "history": [2150, 2175, 2190, 2210, 2230, 2245, 2260, 2275]},
+    {"crop": "Rice",                 "price": 2183,  "change":  1.2,  "history": [2050, 2070, 2090, 2110, 2130, 2155, 2170, 2183]},
+    {"crop": "Maize (Corn)",         "price": 2090,  "change":  1.5,  "history": [1920, 1950, 1975, 2000, 2020, 2045, 2070, 2090]},
+    {"crop": "Mustard",              "price": 5650,  "change":  2.1,  "history": [5200, 5280, 5350, 5420, 5490, 5560, 5610, 5650]},
+    {"crop": "Groundnut",            "price": 6377,  "change":  1.5,  "history": [5900, 5980, 6060, 6140, 6210, 6280, 6330, 6377]},
+    {"crop": "Onion",                "price": 1800,  "change": -2.8,  "history": [2200, 2150, 2100, 2050, 2000, 1950, 1880, 1800]},
+    {"crop": "Potato",               "price": 1200,  "change": -1.4,  "history": [1380, 1350, 1320, 1300, 1280, 1260, 1230, 1200]},
+    {"crop": "Tomato",               "price": 2500,  "change":  4.2,  "history": [1750, 1870, 1990, 2100, 2220, 2320, 2430, 2500]},
+    {"crop": "Chilli",               "price": 8500,  "change":  3.6,  "history": [7400, 7580, 7720, 7860, 7980, 8120, 8320, 8500]},
+    {"crop": "Sugarcane",            "price": 3400,  "change":  0.5,  "history": [3280, 3300, 3320, 3340, 3350, 3360, 3380, 3400]},
+    {"crop": "Arhar (Tur)",          "price": 7000,  "change":  1.0,  "history": [6580, 6640, 6700, 6760, 6820, 6880, 6940, 7000]},
+    {"crop": "Moong",                "price": 8558,  "change":  0.6,  "history": [8180, 8240, 8310, 8380, 8440, 8490, 8530, 8558]},
+    {"crop": "Urad",                 "price": 7400,  "change":  1.3,  "history": [6940, 7000, 7080, 7160, 7220, 7290, 7350, 7400]},
+    {"crop": "Soybean",              "price": 4892,  "change":  0.9,  "history": [4580, 4640, 4700, 4760, 4800, 4830, 4865, 4892]},
+    {"crop": "Cotton",               "price": 6620,  "change":  1.7,  "history": [6100, 6200, 6300, 6380, 6450, 6520, 6580, 6620]},
+    {"crop": "Jowar (Sorghum)",      "price": 3180,  "change":  0.7,  "history": [2980, 3020, 3060, 3090, 3120, 3145, 3165, 3180]},
+    {"crop": "Bajra (Pearl Millet)", "price": 2500,  "change":  1.1,  "history": [2300, 2340, 2380, 2410, 2440, 2460, 2480, 2500]},
+    {"crop": "Bengal Gram (Chana)",  "price": 5440,  "change":  0.8,  "history": [5120, 5180, 5240, 5290, 5340, 5380, 5415, 5440]},
+    {"crop": "Garlic",               "price": 9500,  "change":  5.2,  "history": [6800, 7200, 7600, 8000, 8400, 8800, 9200, 9500]},
+    {"crop": "Ginger",               "price": 12000, "change":  3.8,  "history": [9500, 9900, 10300, 10700, 11100, 11500, 11800, 12000]},
+    {"crop": "Turmeric",             "price": 14500, "change":  6.5,  "history": [10200, 11000, 11800, 12400, 12900, 13400, 14000, 14500]},
+    {"crop": "Cumin (Jeera)",        "price": 22000, "change":  4.1,  "history": [17000, 17800, 18600, 19400, 20100, 20700, 21400, 22000]},
+    {"crop": "Coriander",            "price": 8200,  "change":  2.9,  "history": [6800, 7050, 7300, 7500, 7700, 7850, 8050, 8200]},
+    {"crop": "Sunflower",            "price": 5800,  "change":  1.2,  "history": [5420, 5490, 5560, 5620, 5680, 5730, 5770, 5800]},
+    {"crop": "Sesame (Til)",         "price": 9800,  "change":  2.3,  "history": [8800, 8960, 9100, 9250, 9400, 9560, 9700, 9800]},
+    {"crop": "Linseed",              "price": 6200,  "change":  1.1,  "history": [5800, 5880, 5950, 6010, 6060, 6110, 6160, 6200]},
+    {"crop": "Banana",               "price": 2800,  "change":  2.0,  "history": [2400, 2500, 2560, 2620, 2680, 2720, 2760, 2800]},
+    {"crop": "Mango",                "price": 4500,  "change":  3.5,  "history": [3600, 3800, 3960, 4100, 4250, 4360, 4440, 4500]},
+    {"crop": "Palm Oil",             "price": 7800,  "change":  1.8,  "history": [7200, 7360, 7480, 7560, 7640, 7700, 7760, 7800]},
+    {"crop": "Oats",                 "price": 1950,  "change":  0.6,  "history": [1850, 1870, 1890, 1910, 1925, 1935, 1945, 1950]},
+    {"crop": "Coffee",               "price": 18500, "change":  3.2,  "history": [15000, 15800, 16400, 17000, 17500, 17900, 18200, 18500]},
+    {"crop": "Cocoa",                "price": 12000, "change":  2.5,  "history": [10000, 10400, 10800, 11100, 11400, 11600, 11800, 12000]},
+    {"crop": "Rubber",               "price": 16000, "change":  1.9,  "history": [14500, 14800, 15100, 15400, 15600, 15750, 15900, 16000]},
+    {"crop": "Soybean Oil",          "price": 9200,  "change":  1.4,  "history": [8600, 8720, 8840, 8950, 9020, 9080, 9150, 9200]},
+    {"crop": "Soybean Meal",         "price": 3800,  "change":  0.8,  "history": [3600, 3640, 3680, 3720, 3750, 3770, 3790, 3800]},
 ]
 
 CITY_STATE = {
@@ -393,113 +306,137 @@ CITY_STATE = {
     "Amritsar":      "Punjab",
 }
 
-# Real daily price history, built up one genuine data point per day as the
-# app runs (no fabricated numbers). Persisted to disk so it survives restarts.
-_AGMARK_HISTORY_PATH = os.path.join(basedir, "market_history_cache.json")
-_agmark_history_lock = threading.Lock()
-_agmark_fetch_cache = {}          # {state: (timestamp, results)} — in-memory, 15 min
-AGMARK_CACHE_TTL_SEC = 15 * 60
+CITY_OFFSETS = {
+    "Delhi":         {"default": 3.5, "Onion": 2.0, "Potato": 1.5, "Tomato": 5.0},
+    "Mumbai":        {"default": 5.0, "Onion": 4.0, "Tomato": 6.0, "Cotton": -1.0},
+    "Kolkata":       {"default": 2.0, "Rice": 3.0, "Mustard": 2.5, "Potato": -1.0},
+    "Chennai":       {"default": 4.0, "Rice": 2.5, "Chilli": 5.0, "Groundnut": 3.0},
+    "Hyderabad":     {"default": 3.0, "Chilli": 6.0, "Cotton": 4.0, "Arhar (Tur)": 2.0},
+    "Pune":          {"default": 2.5, "Onion": -3.0, "Sugarcane": 2.0, "Tomato": 3.0},
+    "Ahmedabad":     {"default": 2.0, "Cotton": 5.0, "Groundnut": 4.0, "Mustard": 1.5},
+    "Lucknow":       {"default": 1.5, "Wheat": 1.0, "Potato": -2.0, "Sugarcane": 2.5},
+    "Jaipur":        {"default": 1.0, "Mustard": 3.5, "Wheat": 0.5, "Groundnut": 2.0},
+    "Bhopal":        {"default": 0.5, "Soybean": 4.0, "Wheat": 0.5, "Arhar (Tur)": 1.0},
+    "Patna":         {"default": 1.0, "Rice": 2.5, "Mustard": 1.5, "Potato": -1.5},
+    "Nagpur":        {"default": 1.5, "Cotton": 3.0, "Arhar (Tur)": 2.5, "Soybean": 3.5},
+    "Indore":        {"default": 1.0, "Soybean": 5.0, "Wheat": 0.8, "Urad": 2.0},
+    "Surat":         {"default": 3.0, "Cotton": 2.5, "Groundnut": 1.5, "Tomato": 4.0},
+    "Kanpur":        {"default": 1.5, "Wheat": 1.5, "Sugarcane": 3.0, "Mustard": 1.0},
+    "Coimbatore":    {"default": 3.5, "Groundnut": 5.0, "Chilli": 4.5, "Cotton": 2.0},
+    "Visakhapatnam": {"default": 2.5, "Rice": 3.5, "Chilli": 3.0, "Arhar (Tur)": 2.0},
+    "Bhubaneswar":   {"default": 1.5, "Rice": 4.0, "Mustard": 2.0, "Arhar (Tur)": 1.5},
+    "Guwahati":      {"default": 4.0, "Rice": 5.0, "Chilli": 4.0, "Mustard": 3.0},
+    "Amritsar":      {"default": 2.0, "Wheat": 2.5, "Mustard": 3.0, "Rice": 1.5},
+}
 
 
-def _load_history_cache():
-    try:
-        with open(_AGMARK_HISTORY_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save_history_cache(cache):
-    try:
-        with open(_AGMARK_HISTORY_PATH, "w", encoding="utf-8") as f:
-            json.dump(cache, f)
-    except Exception as e:
-        print(f"[Market] Could not persist history cache: {e}")
-
-
-def fetch_agmarknet_prices(state: str) -> list:
-    """Fetch REAL, government-reported mandi (wholesale market) prices for a
-    state from data.gov.in's official Agmarknet dataset. Returns [] if the
-    feed has nothing usable right now (caller falls back to MSP reference)."""
-    now = time.monotonic()
-    cached = _agmark_fetch_cache.get(state)
-    if cached and (now - cached[0]) < AGMARK_CACHE_TTL_SEC:
-        return cached[1]
-
-    params = {
-        "api-key": DATA_GOV_API_KEY,
-        "format": "json",
-        "limit": 400,
-        "filters[state]": state,
-    }
-    try:
-        resp = requests.get(AGMARKNET_URL, params=params, timeout=12)
-        if resp.status_code != 200:
-            print(f"[Market] Agmarknet HTTP {resp.status_code} for {state}")
-            return []
-        records = resp.json().get("records", [])
-    except Exception as e:
-        print(f"[Market] Agmarknet error for {state}: {e}")
+def fetch_ninja_prices() -> list:
+    """
+    Fetch real-time commodity prices from API-Ninjas.
+    Converts USD/unit to INR/quintal using USD_TO_INR and kg_per_unit.
+    """
+    if not NINJA_API_KEY:
+        print("[Market] NINJA_API_KEY missing — using MSP fallback only")
         return []
 
-    if not records:
-        print(f"[Market] Agmarknet returned no records for {state} today")
-        return []
-
-    # A state has many markets/varieties reporting the same commodity —
-    # keep the most recent record per commodity.
-    latest_by_commodity = {}
-    for r in records:
-        raw_name = (r.get("commodity") or "").strip()
-        modal = r.get("modal_price")
-        if not raw_name or not modal:
-            continue
-        try:
-            modal_price = float(modal)
-        except (TypeError, ValueError):
-            continue
-        if modal_price <= 0:
-            continue
-        display_name = AGMARK_COMMODITY_ALIASES.get(raw_name.lower(), raw_name.title())
-        latest_by_commodity[display_name] = {
-            "market":       r.get("market", ""),
-            "district":     r.get("district", ""),
-            "arrival_date": r.get("arrival_date", ""),
-            "modal_price":  modal_price,
-        }
-
-    today_key = datetime.now().strftime("%Y-%m-%d")
+    headers = {"X-Api-Key": NINJA_API_KEY}
     results = []
-    with _agmark_history_lock:
-        cache = _load_history_cache()
-        state_hist = cache.setdefault(state, {})
 
-        for display_name, rec in latest_by_commodity.items():
-            hist = state_hist.setdefault(display_name, [])
-            if not hist or hist[-1].get("date") != today_key:
-                hist.append({"date": today_key, "price": rec["modal_price"]})
-                hist[:] = hist[-30:]  # keep the last 30 real daily points
+    for ninja_name, display_name, usd_unit, kg_per_unit in NINJA_COMMODITIES:
+        try:
+            encoded = requests.utils.quote(ninja_name)
+            url = f"https://api.api-ninjas.com/v1/commodityprice?name={encoded}"
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code != 200:
+                print(f"[Market] Ninja '{ninja_name}': HTTP {resp.status_code}")
+                continue
+            data = resp.json()
+            price_usd = data.get("price")
+            if not price_usd or float(price_usd) <= 0:
+                print(f"[Market] Ninja '{ninja_name}': no price in response")
+                continue
 
-            prev_price = hist[-2]["price"] if len(hist) > 1 else rec["modal_price"]
-            change = round(((rec["modal_price"] - prev_price) / prev_price) * 100, 2) if prev_price else 0.0
+            price_usd = float(price_usd)
+            # Convert: USD/unit -> INR/quintal
+            # price_per_kg_usd = price_usd / kg_per_unit
+            # price_per_quintal_inr = price_per_kg_usd * 100 * USD_TO_INR
+            price_inr = int((price_usd / kg_per_unit) * 100 * USD_TO_INR)
+
+            # Synthetic 8-week history around live price
+            seed = sum(ord(c) for c in ninja_name)
+            history = []
+            for i in range(8):
+                week_seed = (seed * (i + 7) * 31) % 1000
+                fluct = ((week_seed % 61) - 30) * 0.003
+                trend = ((seed + i * 13) % 100 - 50) * 0.002 * (7 - i) / 7
+                history.append(max(1, int(price_inr * (1 + fluct - trend))))
+
+            # Synthetic % change (API gives point-in-time only)
+            change_seed = (seed * 17 + price_inr) % 1000
+            change = round(((change_seed % 201) - 100) * 0.04, 2)
 
             results.append({
-                "crop":         display_name,
-                "crop_key":     display_name,
-                "price":        int(round(rec["modal_price"])),
-                "change":       change,
-                "history":      [h["price"] for h in hist] or [rec["modal_price"]],
-                "unit":         "Rs/quintal",
-                "source":       "agmarknet_live",
-                "market":       rec["market"],
-                "district":     rec["district"],
-                "arrival_date": rec["arrival_date"],
+                "crop":    display_name,
+                "crop_key": display_name,  # English key for client-side translation
+                "price":   price_inr,
+                "change":  change,
+                "history": history,
+                "unit":    "Rs/quintal",
+                "source":  "ninja_live",
             })
-        _save_history_cache(cache)
+            print(f"[Market] OK Ninja '{ninja_name}': ${price_usd}/{usd_unit} -> Rs{price_inr}/quintal")
 
-    _agmark_fetch_cache[state] = (now, results)
-    print(f"[Market] Agmarknet OK for {state}: {len(results)} commodities")
+        except Exception as e:
+            print(f"[Market] Ninja '{ninja_name}' error: {e}")
+            continue
+
+    print(f"[Market] Ninja fetched {len(results)} live commodities")
     return results
+
+
+def merge_with_fallback(live_crops: list) -> list:
+    live_names = {c["crop"].lower() for c in live_crops}
+    combined = list(live_crops)
+    for fb in MSP_FALLBACK:
+        if fb["crop"].lower() not in live_names:
+            combined.append({
+                "crop":     fb["crop"],
+                "crop_key": fb["crop"],  # English key for translation
+                "price":    fb["price"],
+                "change":   fb["change"],
+                "history":  fb["history"],
+                "unit":     "Rs/quintal",
+                "source":   "msp_fallback",
+            })
+    return combined
+
+
+def get_city_price(base_price: int, city: str, crop_name: str) -> int:
+    offsets = CITY_OFFSETS.get(city, {"default": 0})
+    pct = offsets.get(crop_name, offsets.get("default", 0))
+    return int(round(base_price * (1 + pct / 100)))
+
+
+def get_city_change(base_change: float, city: str, crop_name: str) -> float:
+    seed = sum(ord(c) for c in city + crop_name)
+    tweak = ((seed % 11) - 5) * 0.1
+    return round(base_change + tweak, 2)
+
+
+def get_city_history(base_history: list, city: str, crop_name: str) -> list:
+    offsets = CITY_OFFSETS.get(city, {"default": 0})
+    pct = offsets.get(crop_name, offsets.get("default", 0))
+    factor = 1 + pct / 100
+    seed = sum(ord(c) for c in city + crop_name)
+    result = []
+    for i, base_price in enumerate(base_history):
+        week_seed = (seed * (i + 7) * 31) % 1000
+        fluctuation = ((week_seed % 61) - 30) * 0.001
+        trend_seed = (seed + i * 13) % 100
+        trend_drift = ((trend_seed % 21) - 10) * 0.002 * i
+        city_price = int(base_price * factor * (1 + fluctuation + trend_drift))
+        result.append(max(1, city_price))
+    return result
 
 
 def get_demand(price: int, change: float) -> str:
@@ -516,56 +453,58 @@ def get_market_data():
     if location:
         cities = [c for c in cities if location in c.lower()]
 
+    live_crops = fetch_ninja_prices()
+    all_base_crops = merge_with_fallback(live_crops)
+
+    live_count = sum(1 for c in all_base_crops if c.get("source") == "ninja_live")
+    static_count = len(all_base_crops) - live_count
+    print(f"[Market] Live: {live_count}  Fallback: {static_count}  Total: {len(all_base_crops)}")
+
     markets = {}
-    live_total = 0
-    static_total = 0
-    state_results_cache = {}   # one Agmarknet fetch per state, reused across its cities
-
     for city in cities:
-        state = CITY_STATE.get(city, "")
-        if state not in state_results_cache:
-            state_results_cache[state] = fetch_agmarknet_prices(state)
-
-        crops = list(state_results_cache[state])
-        if not crops:
-            # Rare: this state's mandis haven't reported yet today.
-            crops = [{**fb, "crop_key": fb["crop"], "history": [fb["price"]],
-                      "unit": "Rs/quintal", "source": "msp_fallback"} for fb in MSP_FALLBACK]
-
         city_crops = []
-        for crop in crops:
-            demand = get_demand(crop["price"], crop["change"])
-            city_crops.append({**crop, "demand": demand})
-
+        for crop in all_base_crops:
+            city_price   = get_city_price(crop["price"], city, crop["crop"])
+            city_change  = get_city_change(crop["change"], city, crop["crop"])
+            city_history = get_city_history(crop["history"], city, crop["crop"])
+            demand       = get_demand(city_price, city_change)
+            city_crops.append({
+                "crop":     crop["crop"],       # English display name (also used as translation key)
+                "crop_key": crop["crop_key"],   # explicit English key for data-crop-key attr
+                "price":    city_price,
+                "unit":     "Rs/quintal",
+                "change":   city_change,
+                "history":  city_history,
+                "demand":   demand,             # always English: Very High / High / Medium / Low
+                "source":   crop.get("source", "msp_fallback"),
+            })
         city_crops.sort(
             key=lambda x: ({"Very High": 3, "High": 2, "Medium": 1, "Low": 0}.get(x["demand"], 0), x["price"]),
             reverse=True
         )
         markets[city] = city_crops
-        live_total   += sum(1 for c in city_crops if c.get("source") == "agmarknet_live")
-        static_total += sum(1 for c in city_crops if c.get("source") != "agmarknet_live")
 
     return jsonify({
         "markets":      markets,
         "locations":    list(markets.keys()),
-        "live_count":   live_total,
-        "static_count": static_total,
+        "live_count":   live_count,
+        "static_count": static_count,
         "fetched_at":   datetime.now().isoformat(),
-        "data_source":  "Agmarknet — Ministry of Agriculture & Farmers Welfare, Govt. of India (data.gov.in)",
     })
 
 
 # ─── Debug endpoint ───────────────────────────────────────────────────────────
-@app.route('/api/debug-market')
-def debug_market():
+@app.route('/api/debug-ninja')
+def debug_ninja():
     if not DEBUG_MODE:
         return jsonify({"error": "Not available in production"}), 403
-    state = request.args.get('state', 'Delhi')
+    if not NINJA_API_KEY:
+        return jsonify({"error": "NINJA_API_KEY not set"}), 500
+    headers = {"X-Api-Key": NINJA_API_KEY}
     try:
         resp = requests.get(
-            AGMARKNET_URL,
-            params={"api-key": DATA_GOV_API_KEY, "format": "json", "limit": 20, "filters[state]": state},
-            timeout=10
+            "https://api.api-ninjas.com/v1/commodityprice?name=wheat",
+            headers=headers, timeout=10
         )
         return jsonify({"status": resp.status_code, "response": resp.json() if resp.ok else resp.text})
     except Exception as e:
@@ -609,7 +548,7 @@ Always be warm and address the farmer respectfully. Never use markdown headers. 
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     body = {
-        "model":       "openai/gpt-oss-120b",
+        "model":       "llama-3.3-70b-versatile",
         "messages":    [{"role": "system", "content": system_prompt}] + messages,
         "temperature": 0.7,
         "max_tokens":  400,
@@ -754,8 +693,8 @@ Respond ONLY with valid JSON, no markdown or backticks:
 }}{lang_instruction}"""
 
     vision_models = [
-        "qwen/qwen3.6-27b",
-    ]
+    "qwen/qwen3.6-27b",
+]
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
 
     for model in vision_models:
@@ -775,7 +714,7 @@ Respond ONLY with valid JSON, no markdown or backticks:
                 ],
                 "temperature": 0.2,
                 "max_tokens":  1400,
-                "reasoning_effort": "none",  # skip <think> mode so JSON lands directly in content
+                "reasoning_effort": "none",
             }
             resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=45)
             if resp.status_code in (429, 500, 503):
@@ -837,8 +776,8 @@ def get_alerts():
 
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 TRANSLATE_MODELS = [
-    "openai/gpt-oss-120b",
     "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
     "llama-3.1-8b-instant",
 ]
 TRANSLATE_CHUNK_SIZE = 40   
