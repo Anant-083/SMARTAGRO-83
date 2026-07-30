@@ -1,0 +1,405 @@
+/* ═══════════════════════════════════════
+   alerts.css
+═══════════════════════════════════════ */
+
+.alerts-hero { padding-bottom: 120px; background: linear-gradient(160deg, #0f0505, #100808, #0a0505); }
+.alerts-hero .orb-1 { background: radial-gradient(circle, var(--red), transparent); opacity: 0.15; }
+.alerts-hero .orb-2 { background: radial-gradient(circle, var(--amber), transparent); opacity: 0.12; }
+
+/* Summary Bar */
+.alert-summary-bar {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 16px;
+  z-index: 3;
+  width: min(950px, 90vw);
+}
+.summary-card {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  transition: var(--trans);
+}
+.summary-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); }
+.summary-card i { font-size: 1.3rem; }
+.summary-card div { display: flex; flex-direction: column; }
+.summary-count { font-family: 'Syne', sans-serif; font-size: 1.6rem; font-weight: 800; line-height: 1; }
+.summary-card span:last-child { font-size: 0.72rem; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+
+.card-danger  { border-left: 3px solid var(--red);   }
+.card-danger  i, .card-danger .summary-count { color: var(--red); }
+.card-warning { border-left: 3px solid var(--amber); }
+.card-warning i, .card-warning .summary-count { color: var(--amber); }
+.card-info    { border-left: 3px solid var(--teal);  }
+.card-info    i, .card-info .summary-count { color: var(--teal); }
+.card-total   { border-left: 3px solid var(--green); }
+.card-total   i, .card-total .summary-count { color: var(--green); }
+
+/* ── Location Section ───────────────── */
+.location-section { padding: 80px 0 40px; }
+.location-prompt {
+  max-width: 500px;
+  margin: 0 auto;
+  text-align: center;
+  padding: 48px;
+  background: var(--card);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+}
+.location-icon {
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  background: var(--green-glow);
+  border: 1px solid var(--border-2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.8rem;
+  color: var(--green);
+  margin: 0 auto 20px;
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+.location-prompt h3 { font-size: 1.2rem; margin-bottom: 8px; }
+.location-prompt p  { font-size: 0.875rem; color: var(--text-2); margin-bottom: 24px; }
+
+/* ── Alerts Section ─────────────────── */
+.alerts-section { padding-top: 64px; }
+
+.alert-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 32px;
+  padding: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.alert-tab {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  transition: var(--trans);
+}
+.alert-tab:hover, .alert-tab.active {
+  background: var(--green-glow);
+  border-color: var(--green);
+  color: var(--green);
+}
+
+/* Alert Cards */
+.alerts-list { display: flex; flex-direction: column; gap: 14px; }
+.alerts-loading { text-align: center; padding: 60px 0; }
+.alerts-loading p { color: var(--text-2); margin-top: 8px; }
+
+.alert-card {
+  display: flex;
+  gap: 16px;
+  padding: 20px 24px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--card);
+  transition: var(--trans);
+  animation: fadeInUp 0.3s ease both;
+  position: relative;
+  overflow: hidden;
+}
+.alert-card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+}
+.alert-card.danger  { border-color: rgba(248,113,113,0.25); }
+.alert-card.danger::before  { background: var(--red); }
+.alert-card.warning { border-color: rgba(251,191,36,0.25); }
+.alert-card.warning::before { background: var(--amber); }
+.alert-card.info    { border-color: rgba(45,212,191,0.25); }
+.alert-card.info::before    { background: var(--teal); }
+
+.alert-card:hover { transform: translateX(4px); box-shadow: var(--shadow); }
+
+.alert-card-icon {
+  width: 48px; height: 48px;
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+.alert-card.danger  .alert-card-icon { background: rgba(248,113,113,0.1); }
+.alert-card.warning .alert-card-icon { background: rgba(251,191,36,0.1); }
+.alert-card.info    .alert-card-icon { background: rgba(45,212,191,0.1); }
+
+.alert-card-body { flex: 1; }
+.alert-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.alert-card-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.alert-category {
+  padding: 2px 10px;
+  border-radius: 50px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.cat-weather { background: rgba(56,189,248,0.1); color: #38bdf8; border: 1px solid rgba(56,189,248,0.2); }
+.cat-disease { background: rgba(248,113,113,0.1); color: var(--red); border: 1px solid rgba(248,113,113,0.2); }
+.cat-pest    { background: rgba(251,191,36,0.1); color: var(--amber); border: 1px solid rgba(251,191,36,0.2); }
+.cat-crop    { background: rgba(74,222,128,0.1); color: var(--green); border: 1px solid rgba(74,222,128,0.2); }
+
+.alert-card-msg { font-size: 0.83rem; color: var(--text-2); margin-bottom: 10px; }
+.alert-card-action {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--green);
+  background: rgba(74,222,128,0.05);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(74,222,128,0.1);
+}
+.alert-card-action i { margin-top: 1px; flex-shrink: 0; }
+
+/* No Alerts */
+.no-alerts {
+  text-align: center;
+  padding: 80px 0;
+  display: none;
+}
+.no-alerts-icon {
+  font-size: 4rem;
+  color: var(--green);
+  margin-bottom: 16px;
+  animation: float 3s ease-in-out infinite;
+}
+.no-alerts h3 { font-size: 1.3rem; font-weight: 700; margin-bottom: 8px; }
+.no-alerts p  { font-size: 0.875rem; color: var(--text-2); }
+
+/* ── Pest Calendar ──────────────────── */
+.pest-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.pest-cal-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  transition: var(--trans);
+  animation: fadeInUp 0.4s ease both;
+}
+.pest-cal-card:hover { border-color: var(--amber); transform: translateY(-3px); box-shadow: var(--shadow); }
+.pcal-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.pcal-icon {
+  width: 38px; height: 38px;
+  border-radius: 10px;
+  background: rgba(251,191,36,0.1);
+  border: 1px solid rgba(251,191,36,0.2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1rem;
+}
+.pcal-name { font-weight: 700; font-size: 0.9rem; }
+.pcal-season { font-size: 0.72rem; color: var(--text-3); }
+.pcal-body { font-size: 0.8rem; color: var(--text-2); }
+.pcal-risk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 3px 10px;
+  border-radius: 50px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.risk-high   { background: rgba(248,113,113,0.1); color: var(--red); border: 1px solid rgba(248,113,113,0.2); }
+.risk-medium { background: rgba(251,191,36,0.1);  color: var(--amber); border: 1px solid rgba(251,191,36,0.2); }
+.risk-low    { background: rgba(74,222,128,0.1);  color: var(--green); border: 1px solid rgba(74,222,128,0.2); }
+
+/* ── Pesticide Safety ───────────────── */
+.pesticide-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+.pesticide-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: var(--trans);
+}
+.pesticide-card:hover { border-color: var(--border-2); transform: translateY(-3px); box-shadow: var(--shadow); }
+.pc-header {
+  padding: 14px 18px;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+  font-size: 0.88rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pc-body { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
+.pc-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+}
+.pc-item-label { color: var(--text-3); }
+.pc-item-val { color: var(--text); font-weight: 600; text-align: right; max-width: 60%; }
+.pc-warning {
+  padding: 10px 12px;
+  background: rgba(248,113,113,0.06);
+  border: 1px solid rgba(248,113,113,0.15);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  color: var(--red);
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/* ── Harmful / Safe ─────────────────── */
+.harmful-grid, .safe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.harmful-card {
+  background: rgba(248,113,113,0.04);
+  border: 1px solid rgba(248,113,113,0.2);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  transition: var(--trans);
+}
+.harmful-card:hover { border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.07); }
+.safe-card {
+  background: rgba(74,222,128,0.04);
+  border: 1px solid rgba(74,222,128,0.18);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  transition: var(--trans);
+}
+.safe-card:hover { border-color: rgba(74,222,128,0.35); background: rgba(74,222,128,0.07); }
+.hsc-name { font-size: 1rem; font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.hsc-reason { font-size: 0.8rem; color: var(--text-2); }
+
+/* ── Risk Chart ─────────────────────── */
+.risk-chart-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  align-items: center;
+}
+.chart-canvas-wrap { height: 320px; position: relative; }
+.risk-factors { display: flex; flex-direction: column; gap: 16px; }
+.risk-factor-item {}
+.rfi-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.rfi-bar {
+  height: 8px;
+  background: var(--bg-3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.rfi-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 1.2s cubic-bezier(0.4,0,0.2,1);
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .alert-summary-bar {
+    position: static;
+    transform: none;
+    flex-wrap: wrap;
+    width: auto;
+    margin-top: 24px;
+    padding: 0 16px;
+  }
+  .alerts-hero { padding-bottom: 40px; }
+  .location-section { padding-top: 40px; }
+  .risk-chart-layout { grid-template-columns: 1fr; }
+  .page-hero h1 { font-size: clamp(1.8rem, 5vw, 2.8rem); }
+  .summary-card { padding: 14px 16px; gap: 10px; }
+  .summary-count { font-size: 1.3rem; }
+}
+.disclaimer-container {
+  /* Box Transparency & Styling */
+  background-color: rgba(255, 255, 255, 0.04); 
+  border: 1px solid rgba(255, 255, 255, 0.1); 
+  border-radius: 8px;
+  
+  /* Glassmorphism Blur */
+  backdrop-filter: blur(8px); 
+  -webkit-backdrop-filter: blur(8px);
+  
+  /* Responsive Width & Spacing */
+  width: 90%;               /* Ensures it takes up 90% of small screens */
+  max-width: 650px;         /* Prevents it from getting too wide on desktop */
+  margin: 1.5rem auto;      /* Centers horizontally */
+  padding: 0.875rem 1rem;   /* Safe padding for mobile edge-to-edge space */
+  box-sizing: border-box;   /* Includes padding in total width calculations */
+  text-align: center;
+}
+
+.disclaimer-container p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  
+  /* Ensures long text or unbroken strings wrap properly on tiny screens */
+  word-break: break-word; 
+  overflow-wrap: break-word;
+}
+
+.disclaimer-container strong {
+  color: #e2e8f0;
+}
+
+@media (max-width: 600px) {
+  .alert-summary-bar { gap: 10px; }
+  .summary-card { flex: calc(50% - 5px); min-width: 0; }   /* 2-column grid */
+  .alert-filters { gap: 6px; padding: 12px; }
+  .alert-tab { padding: 6px 10px; font-size: 0.72rem; }
+  .alert-card { flex-direction: column; gap: 12px; padding: 16px; }
+  .alert-card-icon { width: 40px; height: 40px; font-size: 1.2rem; }
+  .risk-chart-layout { grid-template-columns: 1fr; }
+  .pesticide-grid { grid-template-columns: 1fr; }
+  .harmful-grid, .safe-grid { grid-template-columns: 1fr; }
+  .location-prompt { padding: 28px 20px; }
+  .pest-calendar-grid { grid-template-columns: 1fr; }
+}
