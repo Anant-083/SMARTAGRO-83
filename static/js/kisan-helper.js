@@ -662,14 +662,14 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
     }
 
     function startKeepAlive() {
+        // Disabled: pause()/resume() here was meant to stop Chrome desktop's
+        // ~15s auto-halt on long utterances, but on Android Chrome and many
+        // mobile TTS engines it leaves speech stuck paused forever with no
+        // onend/onerror ever firing — silently cutting the answer short.
+        // Chunks are now capped at ~110 chars (well under any 15s ceiling),
+        // so this nudge is unnecessary. Kept as a no-op so existing
+        // startKeepAlive()/clearKeepAlive() calls elsewhere still work.
         clearKeepAlive();
-        speechKeepAliveTimer = setInterval(() => {
-            const synth = window.speechSynthesis;
-            if (synth && synth.speaking && !synth.paused) {
-                synth.pause();
-                synth.resume();
-            }
-        }, 9000);
     }
 
     function splitIntoSpeechChunks(text) {
@@ -679,7 +679,7 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         let buffer = '';
         for (const part of parts) {
             buffer += part;
-            if (buffer.trim().length >= 180 || /[.!?।؟]\s*$/.test(part.trim())) {
+            if (buffer.trim().length >= 110 || /[.!?।؟]\s*$/.test(part.trim())) {
                 chunks.push(buffer.trim());
                 buffer = '';
             }
@@ -774,7 +774,7 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
             window.speechSynthesis.speak(utter);
         }
 
-        setTimeout(speakNextChunk, 500);
+        setTimeout(speakNextChunk, 150);
     }
 
     function pauseSpeaking(msgId) {
