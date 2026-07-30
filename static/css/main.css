@@ -802,35 +802,7 @@ h1,h2,h3,h4 { font-family: 'Syne', sans-serif; line-height: 1.2; }
   #kisanToggleBtn { bottom: 72px !important; }
   #kisanPanel     { bottom: 138px !important; }
 }
-.disclaimer-container {
-  /* Semi-transparent dark background (RGBA) */
-  background-color: rgba(255, 255, 255, 0.04); 
-  
-  /* Subtle glass border */
-  border: 1px solid rgba(255, 255, 255, 0.1); 
-  border-radius: 8px;
-  
-  /* Optional: Soft blur effect behind the box */
-  backdrop-filter: blur(8px); 
-  -webkit-backdrop-filter: blur(8px);
-  
-  /* Sizing and alignment */
-  max-width: 750px;
-  margin: 1.5rem auto;
-  padding: 0.875rem 1.25rem;
-  text-align: center;
-}
 
-.disclaimer-container p {
-  margin: 0;
-  color: #94a3b8; /* Muted gray text */
-  font-size: 0.85rem;
-  line-height: 1.5;
-}
-
-.disclaimer-container strong {
-  color: #e2e8f0; /* Slightly brighter highlight for 'Disclaimer:' */
-}
 @media (min-width: 769px) {
   #mobileBottomNav { display: none !important; }
 }
