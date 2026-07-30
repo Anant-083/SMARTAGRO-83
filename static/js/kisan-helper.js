@@ -693,8 +693,13 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
 
         if (myToken !== speechToken) return;
 
+        // Match chatbot.js exactly: utterance.lang is the language WE want
+        // spoken (from VOICE_LANGS), not necessarily voice.lang. This only
+        // differs when getBestVoice() had to fall back to a non-native
+        // voice, but it's how chatbot.js does it, so mirroring it exactly.
+        const speechLang = VOICE_LANGS[lang] || 'en-IN';
         const utter = new SpeechSynthesisUtterance(clean);
-        utter.lang = voice.lang;
+        utter.lang = speechLang;
         utter.rate = 0.88;
         utter.pitch = 1;
         utter.volume = 1;
