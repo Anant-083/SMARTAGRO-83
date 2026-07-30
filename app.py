@@ -709,7 +709,7 @@ Always be warm and address the farmer respectfully. Never use markdown headers. 
         "stream":      False
     }
     try:
-        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=30)
+        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=500)
         if resp.status_code != 200:
             return jsonify({"error": "AI unavailable"}), 500
         reply = resp.json()["choices"][0]["message"]["content"].strip()
