@@ -673,12 +673,26 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
 
     function splitIntoSpeechChunks(text) {
         // Sentence-boundary split that also understands Devanagari/Urdu punctuation.
+        // MIN/MAX are deliberately generous: the old version flushed a new
+        // chunk at almost every single sentence, so a normal reply became
+        // 8-10 tiny utterances. Each chunk = one fresh speechSynthesis.speak()
+        // call, and for network-backed Indic voices (Telugu/Tamil/Kannada/
+        // Malayalam/Punjabi/Odia/Meitei/Bodo especially) every call pays a
+        // fresh network round-trip. Merging short sentences into fewer,
+        // larger chunks means far fewer round-trips, while MAX_CHUNK still
+        // caps any single utterance well under Chrome's ~15s auto-halt ceiling.
+        const MIN_CHUNK = 180;
+        const MAX_CHUNK = 260;
         const parts = text.match(/[^.!?।؟]+[.!?।؟]*/g) || [text];
         const chunks = [];
         let buffer = '';
         for (const part of parts) {
+            if (buffer && (buffer.length + part.length) > MAX_CHUNK) {
+                chunks.push(buffer.trim());
+                buffer = '';
+            }
             buffer += part;
-            if (buffer.trim().length >= 110 || /[.!?।؟]\s*$/.test(part.trim())) {
+            if (buffer.trim().length >= MIN_CHUNK) {
                 chunks.push(buffer.trim());
                 buffer = '';
             }
@@ -729,6 +743,18 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
             showKisanToast('No ' + (LANG_ROMAN[lang] || lang) + ' voice on this device — reading with the closest available voice.');
         }
 
+        // Network-backed voices (no local engine on the device — this covers
+        // Telugu/Tamil/Kannada/Malayalam/Punjabi/Odia/Meitei/Bodo on most
+        // phones/desktops) need real time to connect before onstart fires.
+        // The old fixed 4s watchdog was tuned for local voices and was
+        // routinely too short for these, so it cancelled the utterance and
+        // skipped to the next chunk — silently dropping whatever it said.
+        // Give network voices more room, and retry a stalled/errored chunk
+        // a couple of times before giving up on it.
+        const isNetworkVoice = voice.localService === false;
+        const watchdogMs = isNetworkVoice ? 9000 : 4000;
+        const MAX_RETRIES = 2;
+
         const chunks = splitIntoSpeechChunks(clean);
         let chunkIndex = 0;
 
@@ -741,7 +767,13 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
                 updateFab('idle');
                 return;
             }
-            const utter = new SpeechSynthesisUtterance(chunks[chunkIndex]);
+            speakChunkWithRetry(chunks[chunkIndex], 0);
+        }
+
+        function speakChunkWithRetry(chunkText, attempt) {
+            if (myToken !== speechToken) return;
+
+            const utter = new SpeechSynthesisUtterance(chunkText);
             utter.lang = voice.lang;
             utter.rate = 0.88;
             utter.pitch = 1;
@@ -749,17 +781,22 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
             utter.voice = voice;
 
             let started = false;
-            // Watchdog: network-based Indic voices (Telugu/Tamil/Kannada/
-            // Malayalam/Punjabi/Odia/Meitei/Bodo especially) can silently
-            // stall — no onstart, no onerror, no onend, ever. Without this,
-            // speech just freezes mid-reply with zero feedback. If onstart
-            // hasn't fired within 4s, bail out of this chunk and continue.
+            // Watchdog: some voices (network-backed Indic ones especially)
+            // can silently stall — no onstart, no onerror, no onend, ever.
+            // If onstart hasn't fired within watchdogMs, retry this same
+            // chunk (fresh utterance) up to MAX_RETRIES times before moving
+            // on, so a slow-starting network voice gets a real chance
+            // instead of losing its line.
             const watchdog = setTimeout(() => {
                 if (myToken !== speechToken || started) return;
                 try { window.speechSynthesis.cancel(); } catch (e) {}
-                chunkIndex++;
-                speakNextChunk();
-            }, 4000);
+                if (attempt < MAX_RETRIES) {
+                    setTimeout(() => { if (myToken === speechToken) speakChunkWithRetry(chunkText, attempt + 1); }, 300);
+                } else {
+                    chunkIndex++;
+                    speakNextChunk();
+                }
+            }, watchdogMs);
 
             utter.onstart = () => {
                 started = true;
@@ -778,10 +815,8 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
                 clearTimeout(watchdog);
                 if (myToken !== speechToken) return;
                 clearKeepAlive();
-                if (!utter._retried && ev.error !== 'canceled' && ev.error !== 'interrupted') {
-                    // Transient engine glitch — retry this chunk once before moving on.
-                    utter._retried = true;
-                    setTimeout(() => { if (myToken === speechToken) window.speechSynthesis.speak(utter); }, 250);
+                if (attempt < MAX_RETRIES && ev.error !== 'canceled' && ev.error !== 'interrupted') {
+                    setTimeout(() => { if (myToken === speechToken) speakChunkWithRetry(chunkText, attempt + 1); }, 250);
                     return;
                 }
                 chunkIndex++;
