@@ -552,17 +552,16 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
 
         const primary = VOICE_LANGS[langCode] || 'en-IN';
         const chain = VOICE_FALLBACK_CHAIN[langCode] || [primary];
-
-        // 1) Exact tag match (e.g. 'hi-IN')
+        // 1) Exact match (e.g. 'hi-IN') — prefer localService if multiple.
         for (const tag of chain) {
-            const exact = availableVoices.find(v => v.lang === tag);
-            if (exact) return exact;
+            const matches = availableVoices.filter(v => v.lang === tag);
+            if (matches.length) return matches.find(v => v.localService) || matches[0];
         }
-        // 2) Prefix match (e.g. any voice starting with 'hi')
+        // 2) Prefix match (e.g. any voice starting with 'te') — same rule.
         for (const tag of chain) {
             const prefix = tag.split('-')[0];
-            const partial = availableVoices.find(v => v.lang.startsWith(prefix));
-            if (partial) return partial;
+            const matches = availableVoices.filter(v => v.lang.startsWith(prefix));
+            if (matches.length) return matches.find(v => v.localService) || matches[0];
         }
         // 3) chatbot.js-style universal fallback: this is the part
         //    kisan-helper was missing. Rather than returning null (and the
@@ -749,17 +748,34 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
             utter.volume = 1;
             utter.voice = voice;
 
+            let started = false;
+            // Watchdog: network-based Indic voices (Telugu/Tamil/Kannada/
+            // Malayalam/Punjabi/Odia/Meitei/Bodo especially) can silently
+            // stall — no onstart, no onerror, no onend, ever. Without this,
+            // speech just freezes mid-reply with zero feedback. If onstart
+            // hasn't fired within 4s, bail out of this chunk and continue.
+            const watchdog = setTimeout(() => {
+                if (myToken !== speechToken || started) return;
+                try { window.speechSynthesis.cancel(); } catch (e) {}
+                chunkIndex++;
+                speakNextChunk();
+            }, 4000);
+
             utter.onstart = () => {
+                started = true;
+                clearTimeout(watchdog);
                 speakingMsgId = msgId;
                 setSpeakBtnState(msgId, 'speaking');
                 updateFab('speaking');
                 startKeepAlive();
             };
             utter.onend = () => {
+                clearTimeout(watchdog);
                 chunkIndex++;
                 speakNextChunk();
             };
             utter.onerror = (ev) => {
+                clearTimeout(watchdog);
                 if (myToken !== speechToken) return;
                 clearKeepAlive();
                 if (!utter._retried && ev.error !== 'canceled' && ev.error !== 'interrupted') {
