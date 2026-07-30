@@ -698,14 +698,14 @@ The user may write to you in ANY language or mix of languages — Hindi, English
 No matter what language the user writes in, you MUST always reply ONLY in {lang_name}, using its native script (not transliteration).
 You help farmers with: crop diseases, weather advice, pesticide usage, market prices, government schemes (PM-KISAN, Fasal Bima Yojana, Kisan Credit Card), soil health, irrigation, seasonal crop recommendations.
 Keep answers practical, simple, and farmer-friendly. Use bullet points for lists.
-Always be warm and address the farmer respectfully. Never use markdown headers. Keep responses under 200 words."""
+Always be warm and address the farmer respectfully. Never use markdown headers. Keep responses under 130 words."""
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     body = {
         "model":       "openai/gpt-oss-120b",
         "messages":    [{"role": "system", "content": system_prompt}] + messages,
         "temperature": 0.7,
-        "max_tokens":  400,
+        "max_tokens":  900,
         "stream":      False
     }
     try:
