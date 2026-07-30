@@ -663,6 +663,25 @@ h1,h2,h3,h4 { font-family: 'Syne', sans-serif; line-height: 1.2; }
   padding: 40px 0;
   text-align: center;
 }
+
+/* ── Disclaimer box ──────────────────────────────────── */
+.disclaimer-container {
+  max-width: 680px;
+  margin: 0 auto 28px;
+  padding: 14px 20px;
+  background: rgba(251,191,36,0.06);
+  border: 1px solid rgba(251,191,36,0.22);
+  border-radius: var(--radius-sm);
+  backdrop-filter: blur(6px);
+}
+.disclaimer-container p {
+  color: var(--text-2);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.disclaimer-container strong {
+  color: var(--amber);
+}
 .footer-brand {
   display: flex;
   align-items: center;
@@ -801,6 +820,10 @@ h1,h2,h3,h4 { font-family: 'Syne', sans-serif; line-height: 1.2; }
   #kisanHelpline  { bottom: 72px !important; }
   #kisanToggleBtn { bottom: 72px !important; }
   #kisanPanel     { bottom: 138px !important; }
+
+  /* Keep the disclaimer clear of the floating helpline/mic + bottom nav */
+  .footer { padding-bottom: 100px; }
+  .disclaimer-container { margin: 0 auto 20px; }
 }
 
 @media (min-width: 769px) {
