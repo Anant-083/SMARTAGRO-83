@@ -774,7 +774,7 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
             window.speechSynthesis.speak(utter);
         }
 
-        setTimeout(speakNextChunk, 150);
+        setTimeout(speakNextChunk, 500);
     }
 
     function pauseSpeaking(msgId) {
