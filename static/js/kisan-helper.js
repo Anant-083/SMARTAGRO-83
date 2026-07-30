@@ -534,59 +534,32 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         }, 150);
     }
 
-    const VOICE_FALLBACK_CHAIN = {
-        ur: ['ur-PK', 'ur-IN', 'ur', 'hi-IN'],
-        or: ['or-IN', 'hi-IN', 'bn-IN'],
-        as: ['as-IN', 'bn-IN', 'hi-IN'],
-        mai: ['mai-IN', 'hi-IN'],
-        ne: ['ne-NP', 'ne-IN', 'hi-IN'],
-        sa: ['sa-IN', 'hi-IN'],
-        kok: ['kok-IN', 'mr-IN', 'hi-IN'],
-        mni: ['mni-IN', 'bn-IN', 'as-IN', 'hi-IN'],
-        bodo: ['brx-IN', 'hi-IN', 'as-IN'],
-        doi: ['doi-IN', 'hi-IN', 'pa-IN'],
-    };
-
+    // Voice selection — same approach as chatbot.js's getBestVoice(): a
+    // simple exact-match then prefix-match then English fallback, with no
+    // per-language fallback chain to maintain. Simpler = fewer places for
+    // a specific language to fall through a gap.
     function getBestVoice(langCode) {
         if (!availableVoices.length) return null; // truly no voices on this device at all
 
-        const primary = VOICE_LANGS[langCode] || 'en-IN';
-        const chain = VOICE_FALLBACK_CHAIN[langCode] || [primary];
-        // 1) Exact match (e.g. 'hi-IN') — prefer localService if multiple.
-        for (const tag of chain) {
-            const matches = availableVoices.filter(v => v.lang === tag);
-            if (matches.length) return matches.find(v => v.localService) || matches[0];
-        }
-        // 2) Prefix match (e.g. any voice starting with 'te') — same rule.
-        for (const tag of chain) {
-            const prefix = tag.split('-')[0];
-            const matches = availableVoices.filter(v => v.lang.startsWith(prefix));
-            if (matches.length) return matches.find(v => v.localService) || matches[0];
-        }
-        // 3) chatbot.js-style universal fallback: this is the part
-        //    kisan-helper was missing. Rather than returning null (and the
-        //    speak button doing nothing), fall back to an Indian-English
-        //    voice, then any English voice, then literally whatever voice
-        //    the device has — so the speaker always plays something.
-        if (langCode !== 'en') {
-            const enIN = availableVoices.find(v => v.lang === 'en-IN');
-            if (enIN) return enIN;
-        }
-        const anyEn = availableVoices.find(v => v.lang.startsWith('en'));
-        if (anyEn) return anyEn;
+        const speechLang = VOICE_LANGS[langCode] || 'en-IN';
+        const langPrefix = speechLang.split('-')[0];
 
-        return availableVoices[0] || null;
+        let voice = availableVoices.find(v => v.lang === speechLang);
+        if (!voice) voice = availableVoices.find(v => v.lang.startsWith(langPrefix));
+        if (!voice && langCode !== 'en') voice = availableVoices.find(v => v.lang === 'en-IN');
+        if (!voice) voice = availableVoices.find(v => v.lang.startsWith('en'));
+        if (!voice) voice = availableVoices[0];
+
+        return voice || null;
     }
 
     // True only when a *native* voice for this language exists (used to
     // decide whether to show a "reading in English" hint, not to gate
     // whether speaking happens at all).
     function hasNativeVoice(langCode) {
-        const primary = VOICE_LANGS[langCode] || 'en-IN';
-        const chain = VOICE_FALLBACK_CHAIN[langCode] || [primary];
-        return chain.some(tag =>
-            availableVoices.some(v => v.lang === tag || v.lang.startsWith(tag.split('-')[0]))
-        );
+        const speechLang = VOICE_LANGS[langCode] || 'en-IN';
+        const langPrefix = speechLang.split('-')[0];
+        return availableVoices.some(v => v.lang === speechLang || v.lang.startsWith(langPrefix));
     }
 
     function showKisanToast(msg) {
@@ -671,36 +644,6 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         clearKeepAlive();
     }
 
-    function splitIntoSpeechChunks(text) {
-        // Sentence-boundary split that also understands Devanagari/Urdu punctuation.
-        // MIN/MAX are deliberately generous: the old version flushed a new
-        // chunk at almost every single sentence, so a normal reply became
-        // 8-10 tiny utterances. Each chunk = one fresh speechSynthesis.speak()
-        // call, and for network-backed Indic voices (Telugu/Tamil/Kannada/
-        // Malayalam/Punjabi/Odia/Meitei/Bodo especially) every call pays a
-        // fresh network round-trip. Merging short sentences into fewer,
-        // larger chunks means far fewer round-trips, while MAX_CHUNK still
-        // caps any single utterance well under Chrome's ~15s auto-halt ceiling.
-        const MIN_CHUNK = 180;
-        const MAX_CHUNK = 260;
-        const parts = text.match(/[^.!?।؟]+[.!?।؟]*/g) || [text];
-        const chunks = [];
-        let buffer = '';
-        for (const part of parts) {
-            if (buffer && (buffer.length + part.length) > MAX_CHUNK) {
-                chunks.push(buffer.trim());
-                buffer = '';
-            }
-            buffer += part;
-            if (buffer.trim().length >= MIN_CHUNK) {
-                chunks.push(buffer.trim());
-                buffer = '';
-            }
-        }
-        if (buffer.trim()) chunks.push(buffer.trim());
-        return chunks.filter(Boolean);
-    }
-
     let voiceFallbackNoticeShown = {}; // one soft hint per language per session, not a hard failure
 
     function speakText(text, msgId) {
@@ -715,9 +658,14 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
         ensureVoicesReady(() => _speakTextNow(text, msgId));
     }
 
+    // This mirrors chatbot.js's toggleSpeak() almost exactly: ONE
+    // utterance for the whole reply, no chunking, no watchdog timers, no
+    // retry logic. That simplicity is exactly why chatbot.js reads every
+    // language completely and fluently — one utterance means one
+    // connection to the voice engine, so there's nothing to time out or
+    // silently drop mid-reply the way splitting into many small pieces did.
     function _speakTextNow(text, msgId) {
         window.speechSynthesis.cancel();
-        clearKeepAlive();
         speechToken++;
         const myToken = speechToken;
 
@@ -743,89 +691,29 @@ body.light-theme .kw-rec-hint   { color: #9ca3af; }
             showKisanToast('No ' + (LANG_ROMAN[lang] || lang) + ' voice on this device — reading with the closest available voice.');
         }
 
-        // Network-backed voices (no local engine on the device — this covers
-        // Telugu/Tamil/Kannada/Malayalam/Punjabi/Odia/Meitei/Bodo on most
-        // phones/desktops) need real time to connect before onstart fires.
-        // The old fixed 4s watchdog was tuned for local voices and was
-        // routinely too short for these, so it cancelled the utterance and
-        // skipped to the next chunk — silently dropping whatever it said.
-        // Give network voices more room, and retry a stalled/errored chunk
-        // a couple of times before giving up on it.
-        const isNetworkVoice = voice.localService === false;
-        const watchdogMs = isNetworkVoice ? 9000 : 4000;
-        const MAX_RETRIES = 2;
+        if (myToken !== speechToken) return;
 
-        const chunks = splitIntoSpeechChunks(clean);
-        let chunkIndex = 0;
+        const utter = new SpeechSynthesisUtterance(clean);
+        utter.lang = voice.lang;
+        utter.rate = 0.88;
+        utter.pitch = 1;
+        utter.volume = 1;
+        utter.voice = voice;
 
-        function speakNextChunk() {
-            if (myToken !== speechToken) return; // superseded by a newer speak/stop call
-            if (chunkIndex >= chunks.length) {
-                clearKeepAlive();
-                if (speakingMsgId === msgId) speakingMsgId = null;
-                setSpeakBtnState(msgId, 'idle');
-                updateFab('idle');
-                return;
-            }
-            speakChunkWithRetry(chunks[chunkIndex], 0);
-        }
-
-        function speakChunkWithRetry(chunkText, attempt) {
+        utter.onstart = () => {
             if (myToken !== speechToken) return;
+            speakingMsgId = msgId;
+            setSpeakBtnState(msgId, 'speaking');
+            updateFab('speaking');
+        };
+        utter.onend = utter.onerror = () => {
+            if (myToken !== speechToken) return;
+            if (speakingMsgId === msgId) speakingMsgId = null;
+            setSpeakBtnState(msgId, 'idle');
+            updateFab('idle');
+        };
 
-            const utter = new SpeechSynthesisUtterance(chunkText);
-            utter.lang = voice.lang;
-            utter.rate = 0.88;
-            utter.pitch = 1;
-            utter.volume = 1;
-            utter.voice = voice;
-
-            let started = false;
-            // Watchdog: some voices (network-backed Indic ones especially)
-            // can silently stall — no onstart, no onerror, no onend, ever.
-            // If onstart hasn't fired within watchdogMs, retry this same
-            // chunk (fresh utterance) up to MAX_RETRIES times before moving
-            // on, so a slow-starting network voice gets a real chance
-            // instead of losing its line.
-            const watchdog = setTimeout(() => {
-                if (myToken !== speechToken || started) return;
-                try { window.speechSynthesis.cancel(); } catch (e) {}
-                if (attempt < MAX_RETRIES) {
-                    setTimeout(() => { if (myToken === speechToken) speakChunkWithRetry(chunkText, attempt + 1); }, 300);
-                } else {
-                    chunkIndex++;
-                    speakNextChunk();
-                }
-            }, watchdogMs);
-
-            utter.onstart = () => {
-                started = true;
-                clearTimeout(watchdog);
-                speakingMsgId = msgId;
-                setSpeakBtnState(msgId, 'speaking');
-                updateFab('speaking');
-                startKeepAlive();
-            };
-            utter.onend = () => {
-                clearTimeout(watchdog);
-                chunkIndex++;
-                speakNextChunk();
-            };
-            utter.onerror = (ev) => {
-                clearTimeout(watchdog);
-                if (myToken !== speechToken) return;
-                clearKeepAlive();
-                if (attempt < MAX_RETRIES && ev.error !== 'canceled' && ev.error !== 'interrupted') {
-                    setTimeout(() => { if (myToken === speechToken) speakChunkWithRetry(chunkText, attempt + 1); }, 250);
-                    return;
-                }
-                chunkIndex++;
-                speakNextChunk();
-            };
-            window.speechSynthesis.speak(utter);
-        }
-
-        setTimeout(speakNextChunk, 150);
+        window.speechSynthesis.speak(utter);
     }
 
     function pauseSpeaking(msgId) {
