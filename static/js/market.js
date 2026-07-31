@@ -229,4 +229,4 @@ function buildTable(markets) {
   }).join('');
   const thead=document.querySelector('.price-table thead tr');
   if (thead) thead.innerHTML='<th>Crop</th>'+cities.map(c=>`<th>${c}</th>`).join('');
-}
+} 
