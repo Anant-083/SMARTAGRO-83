@@ -21,8 +21,6 @@ import os
 import json
 import re
 import time
-import asyncio
-import base64
 import threading
 import concurrent.futures
 from datetime import datetime, timedelta
@@ -51,7 +49,6 @@ LANG_NAMES = {
 print(f"[AgroSmart] Groq key:    {'OK (' + GROQ_API_KEY[:8] + '...)' if GROQ_API_KEY else 'MISSING'}")
 print(f"[AgroSmart] Weather key: {'OK' if OPENWEATHER_API_KEY else 'MISSING'}")
 print(f"[AgroSmart] Ninja key:   {'OK (' + NINJA_API_KEY[:8] + '...)' if NINJA_API_KEY else 'MISSING'}")
-print(f"[AgroSmart] Kisan TTS:   edge-tts (free, no API key needed)")
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -381,6 +378,24 @@ AGMARK_COMMODITY_ALIASES = {
     "banana": "Banana", "mango": "Mango",
 }
 
+# MSP / benchmark reference price (Rs per quintal) per display crop name —
+# used to compute each live price's "above_msp" flag and the ₹MSP figure
+# shown next to it in the UI (market.js expects crop.msp + crop.above_msp
+# on every row). Government MSP crops use the official MSP; crops without
+# an official MSP get a reasonable indicative benchmark instead so the
+# comparison still renders sensibly.
+MSP_REFERENCE = {
+    "Wheat": 2275, "Rice": 2300, "Maize (Corn)": 2090, "Mustard": 5650,
+    "Groundnut": 6377, "Cotton": 7121, "Soybean": 4892,
+    "Jowar (Sorghum)": 3371, "Bajra (Pearl Millet)": 2625,
+    "Bengal Gram (Chana)": 5440, "Arhar (Tur)": 7550, "Moong": 8682,
+    "Urad": 7400, "Sugarcane": 3150,
+    # Indicative benchmarks (no official MSP for these):
+    "Onion": 1800, "Potato": 1200, "Tomato": 2500, "Chilli": 8000,
+    "Garlic": 4000, "Ginger": 5000, "Turmeric": 8000,
+    "Cumin (Jeera)": 25000, "Coriander": 7000, "Banana": 2000, "Mango": 3000,
+}
+
 # Reference prices — used ONLY on the rare day a state's mandis haven't
 # reported anything yet (Agmarknet is govt.-updated once daily; occasional
 # gaps happen on holidays). Clearly tagged as "msp_fallback" so the UI badge
@@ -552,11 +567,15 @@ def fetch_agmarknet_prices(state: str) -> list:
 
             prev_price = hist[-2]["price"] if len(hist) > 1 else rec["modal_price"]
             change = round(((rec["modal_price"] - prev_price) / prev_price) * 100, 2) if prev_price else 0.0
+            price_int = int(round(rec["modal_price"]))
+            msp = MSP_REFERENCE.get(display_name, price_int)
 
             results.append({
                 "crop":         display_name,
                 "crop_key":     display_name,
-                "price":        int(round(rec["modal_price"])),
+                "price":        price_int,
+                "msp":          msp,
+                "above_msp":    price_int >= msp,
                 "change":       change,
                 "history":      [h["price"] for h in hist] or [rec["modal_price"]],
                 "unit":         "Rs/quintal",
@@ -613,6 +632,7 @@ def get_market_data():
         if not crops:
             # Rare: this state's mandis haven't reported yet today.
             crops = [{**fb, "crop_key": fb["crop"], "history": [fb["price"]],
+                      "msp": fb["price"], "above_msp": True,
                       "unit": "Rs/quintal", "source": "msp_fallback"} for fb in MSP_FALLBACK]
 
         city_crops = []
@@ -788,144 +808,6 @@ def speech_to_text():
         return jsonify({"text": text})
     except Exception as e:
         print(f"[STT exception] {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# ─── Kisan Helper — Text-to-Speech (Google Cloud TTS) ────────────────────────
-# The browser's built-in speechSynthesis only speaks languages that happen to
-# have a voice installed on that specific device/OS — on most phones and
-# desktops that's just English and maybe Hindi. This generates the audio
-# server-side instead using edge-tts (Microsoft Edge's own "Read aloud"
-# voice service, wrapped by the open-source `edge-tts` PyPI package). It's
-# genuinely free — no API key, no Google/Azure account, no credit card —
-# because it's the same free service the Edge browser itself calls.
-#
-# Caveat worth knowing: this rides on a consumer-facing Microsoft service
-# rather than a published, contractually-supported API, so there's a small
-# chance it could be rate-limited or changed without notice. That's exactly
-# why the frontend automatically falls back to the browser's own voices if
-# this endpoint ever fails — nothing breaks either way.
-#
-# Rather than hardcoding voice names (which drift as Microsoft adds/removes
-# voices), we fetch the live voice list once and pick the first match for
-# each language's fallback chain — locales it doesn't have a voice for
-# (Odia, Assamese, Maithili, Santali, Kashmiri, Sindhi, Konkani,
-# Manipuri/Meitei, Bodo, Dogri, Sanskrit) automatically fall through to the
-# closest major language, same as the browser-voice path already does.
-LANG_LOCALE_FALLBACKS = {
-    "en":   ["en-IN", "en-US"],
-    "hi":   ["hi-IN"],
-    "bn":   ["bn-IN", "bn-BD"],
-    "te":   ["te-IN"],
-    "mr":   ["mr-IN"],
-    "ta":   ["ta-IN"],
-    "gu":   ["gu-IN"],
-    "kn":   ["kn-IN"],
-    "ml":   ["ml-IN"],
-    "pa":   ["pa-IN", "hi-IN"],
-    "or":   ["or-IN", "hi-IN"],
-    "as":   ["as-IN", "bn-IN", "hi-IN"],
-    "ur":   ["ur-IN", "ur-PK", "hi-IN"],
-    "ne":   ["ne-NP", "hi-IN"],
-    "mai":  ["hi-IN"],
-    "sat":  ["hi-IN"],
-    "ks":   ["ur-PK", "ur-IN", "hi-IN"],
-    "sd":   ["ur-PK", "hi-IN"],
-    "kok":  ["mr-IN", "hi-IN"],
-    "mni":  ["bn-IN", "hi-IN"],
-    "bodo": ["hi-IN"],
-    "doi":  ["hi-IN"],
-    "sa":   ["hi-IN"],
-}
-# Last-resort hardcoded voices, used only if the live voice-list fetch
-# itself fails (e.g. no internet at startup) — these have been stable for
-# years and cover the most common languages so TTS still mostly works.
-_FALLBACK_VOICES = {
-    "en-IN": "en-IN-NeerjaNeural", "en-US": "en-US-AriaNeural",
-    "hi-IN": "hi-IN-SwaraNeural", "bn-IN": "bn-IN-TanishaaNeural",
-    "te-IN": "te-IN-ShrutiNeural", "mr-IN": "mr-IN-AarohiNeural",
-    "ta-IN": "ta-IN-PallaviNeural", "gu-IN": "gu-IN-DhwaniNeural",
-    "kn-IN": "kn-IN-SapnaNeural", "ml-IN": "ml-IN-SobhanaNeural",
-    "ur-IN": "ur-IN-GulNeural", "ur-PK": "ur-PK-UzmaNeural",
-}
-
-_edge_voices_cache = None  # populated lazily on first /api/tts call
-
-
-def _get_edge_voices():
-    global _edge_voices_cache
-    if _edge_voices_cache is not None:
-        return _edge_voices_cache
-    try:
-        import edge_tts
-        _edge_voices_cache = asyncio.run(edge_tts.list_voices())
-    except Exception as e:
-        print(f"[TTS] Could not fetch live voice list, using built-in fallback list: {e}")
-        _edge_voices_cache = []
-    return _edge_voices_cache
-
-
-def _pick_voice_for_lang(lang: str) -> str:
-    voices = _get_edge_voices()
-    for locale in LANG_LOCALE_FALLBACKS.get(lang, ["en-IN"]):
-        match = next((v["ShortName"] for v in voices if v.get("Locale") == locale), None)
-        if match:
-            return match
-        if locale in _FALLBACK_VOICES:
-            return _FALLBACK_VOICES[locale]
-    return _FALLBACK_VOICES["en-IN"]
-
-
-_tts_rate = {}
-TTS_LIMIT = 20
-MAX_TTS_TEXT_LEN = 1000  # a single chat reply is well under this
-
-
-def _is_rate_limited_tts(ip: str) -> bool:
-    now = datetime.now().timestamp()
-    times = [t for t in _tts_rate.get(ip, []) if now - t < 60]
-    _tts_rate[ip] = times
-    if len(times) >= TTS_LIMIT:
-        return True
-    _tts_rate[ip].append(now)
-    return False
-
-
-@app.route("/api/tts", methods=["POST"])
-def text_to_speech():
-    ip = request.remote_addr or "unknown"
-    if _is_rate_limited_tts(ip):
-        return jsonify({"error": "Too many requests. Please wait a moment."}), 429
-
-    data = request.json or {}
-    text = (data.get("text") or "").strip()
-    lang = data.get("lang", "en")
-
-    if not text:
-        return jsonify({"error": "No text provided"}), 400
-    if len(text) > MAX_TTS_TEXT_LEN:
-        text = text[:MAX_TTS_TEXT_LEN]
-
-    voice = _pick_voice_for_lang(lang)
-
-    try:
-        import edge_tts
-
-        async def synthesize():
-            communicate = edge_tts.Communicate(text, voice, rate="-8%")
-            chunks = bytearray()
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    chunks.extend(chunk["data"])
-            return bytes(chunks)
-
-        audio_bytes = asyncio.run(synthesize())
-        if not audio_bytes:
-            return jsonify({"error": "Empty audio from TTS provider"}), 500
-        audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
-        return jsonify({"audio": audio_b64, "mime": "audio/mp3"})
-    except Exception as e:
-        print(f"[TTS exception] {e}")
         return jsonify({"error": str(e)}), 500
 
 
