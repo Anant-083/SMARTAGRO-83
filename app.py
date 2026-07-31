@@ -1,12 +1,5 @@
 from flask import Flask, render_template, request, jsonify
 import requests
-
-# ── Windows fix: force IPv4 for outbound requests ───────────────────────────
-# If a browser reaches a URL instantly but Python's `requests` times out on
-# the exact same URL, it is almost always because requests/urllib3 tries
-# IPv6 first and your network's IPv6 path is broken or very slow, while the
-# browser silently falls back to IPv4 in milliseconds. This forces Python's
-# HTTP stack to only use IPv4, matching what the browser effectively does.
 try:
     import socket
     import urllib3.util.connection as urllib3_conn
@@ -396,22 +389,6 @@ MSP_REFERENCE = {
     "Cumin (Jeera)": 25000, "Coriander": 7000, "Banana": 2000, "Mango": 3000,
 }
 
-# Reference prices — used ONLY on the rare day a state's mandis haven't
-# reported anything yet (Agmarknet is govt.-updated once daily; occasional
-# gaps happen on holidays). Clearly tagged as "msp_fallback" so the UI badge
-# tells the farmer these are reference, not live, prices.
-MSP_FALLBACK = [
-    {"crop": "Wheat",             "price": 2275,  "change": 0.0},
-    {"crop": "Rice",              "price": 2183,  "change": 0.0},
-    {"crop": "Maize (Corn)",      "price": 2090,  "change": 0.0},
-    {"crop": "Mustard",           "price": 5650,  "change": 0.0},
-    {"crop": "Groundnut",         "price": 6377,  "change": 0.0},
-    {"crop": "Onion",             "price": 1800,  "change": 0.0},
-    {"crop": "Potato",            "price": 1200,  "change": 0.0},
-    {"crop": "Tomato",            "price": 2500,  "change": 0.0},
-    {"crop": "Bengal Gram (Chana)", "price": 5440, "change": 0.0},
-]
-
 CITY_STATE = {
     "Delhi":         "Delhi",
     "Mumbai":        "Maharashtra",
@@ -459,17 +436,6 @@ def _save_history_cache(cache):
         print(f"[Market] Could not persist history cache: {e}")
 
 
-def _field(record: dict, *keys):
-    """data.gov.in resources don't always serve field names consistently
-    (snake_case vs the legacy CKAN 'Modal_x0020_Price' style, or different
-    capitalisation) — try every known variant before giving up."""
-    for k in keys:
-        v = record.get(k)
-        if v not in (None, ""):
-            return v
-    return None
-
-
 # A handful of states are recorded under a different name than their
 # common name (same place, different label) — try each candidate in
 # order until one returns records. NOTE: this must only contain true
@@ -485,8 +451,11 @@ STATE_NAME_CANDIDATES = {
 
 def fetch_agmarknet_prices(state: str) -> list:
     """Fetch REAL, government-reported mandi (wholesale market) prices for a
-    state from data.gov.in's official Agmarknet dataset. Returns [] if the
-    feed has nothing usable right now (caller falls back to MSP reference)."""
+    state from data.gov.in's official Agmarknet dataset (resource
+    9ef84268-d588-465a-a308-a864a43d0070). Confirmed field names returned by
+    the API: state, district, market, commodity, variety, arrival_date,
+    min_price, max_price, modal_price. Returns [] if the feed has nothing
+    usable right now (caller simply omits that city)."""
     now = time.monotonic()
     cached = _agmark_fetch_cache.get(state)
     if cached and (now - cached[0]) < AGMARK_CACHE_TTL_SEC:
@@ -521,18 +490,14 @@ def fetch_agmarknet_prices(state: str) -> list:
         print(f"[Market] Agmarknet: no usable records for {state} after trying all name variants")
         return []
 
-    # Log the exact keys of the first record once, so if parsing still
-    # fails you can see the real field names by checking your app logs.
-    print(f"[Market] Sample record keys for {state}: {list(records[0].keys())}")
-
     # A state has many markets/varieties reporting the same commodity —
     # keep the most recent record per commodity.
     latest_by_commodity = {}
     skipped_no_price = 0
     for r in records:
-        raw_name = str(_field(r, "commodity", "Commodity") or "").strip()
-        modal = _field(r, "modal_price", "Modal_x0020_Price", "Modal Price", "modal price")
-        if not raw_name or modal is None:
+        raw_name = str(r.get("commodity") or "").strip()
+        modal = r.get("modal_price")
+        if not raw_name or modal in (None, ""):
             skipped_no_price += 1
             continue
         try:
@@ -544,9 +509,11 @@ def fetch_agmarknet_prices(state: str) -> list:
             continue
         display_name = AGMARK_COMMODITY_ALIASES.get(raw_name.lower(), raw_name.title())
         latest_by_commodity[display_name] = {
-            "market":       _field(r, "market", "Market") or "",
-            "district":     _field(r, "district", "District") or "",
-            "arrival_date": _field(r, "arrival_date", "Arrival_Date") or "",
+            "market":       r.get("market") or "",
+            "district":     r.get("district") or "",
+            "arrival_date": r.get("arrival_date") or "",
+            "min_price":    r.get("min_price"),
+            "max_price":    r.get("max_price"),
             "modal_price":  modal_price,
         }
 
@@ -607,7 +574,6 @@ def get_market_data():
 
     markets = {}
     live_total = 0
-    static_total = 0
 
     # Fetch every unique state IN PARALLEL instead of one-by-one — with
     # ~13 unique states and a government API that can be slow/overloaded,
@@ -630,10 +596,9 @@ def get_market_data():
         state = CITY_STATE.get(city, "")
         crops = list(state_results_cache.get(state, []))
         if not crops:
-            # Rare: this state's mandis haven't reported yet today.
-            crops = [{**fb, "crop_key": fb["crop"], "history": [fb["price"]],
-                      "msp": fb["price"], "above_msp": True,
-                      "unit": "Rs/quintal", "source": "msp_fallback"} for fb in MSP_FALLBACK]
+            # This state's mandis haven't reported anything today — skip
+            # the city entirely rather than showing stale reference prices.
+            continue
 
         city_crops = []
         for crop in crops:
@@ -645,16 +610,14 @@ def get_market_data():
             reverse=True
         )
         markets[city] = city_crops
-        live_total   += sum(1 for c in city_crops if c.get("source") == "agmarknet_live")
-        static_total += sum(1 for c in city_crops if c.get("source") != "agmarknet_live")
+        live_total += len(city_crops)
 
     return jsonify({
-        "markets":      markets,
-        "locations":    list(markets.keys()),
-        "live_count":   live_total,
-        "static_count": static_total,
-        "fetched_at":   datetime.now().isoformat(),
-        "data_source":  "Agmarknet — Ministry of Agriculture & Farmers Welfare, Govt. of India (data.gov.in)",
+        "markets":     markets,
+        "locations":   list(markets.keys()),
+        "live_count":  live_total,
+        "fetched_at":  datetime.now().isoformat(),
+        "data_source": "Agmarknet — Ministry of Agriculture & Farmers Welfare, Govt. of India (data.gov.in)",
     })
 
 
