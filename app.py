@@ -1547,5 +1547,34 @@ def translate_diagnosis_result():
     return jsonify({"lang": lang, "lang_name": lang_name, "translations": translations, "cached": cached})
 
 
+def _prewarm_market_cache():
+    """Runs in the background, continuously. Refreshes every state's
+    Agmarknet data BEFORE its cache entry expires, so a real user request
+    (page load or search) almost always hits the 15-minute cache instead of
+    waiting on a live data.gov.in call directly. data.gov.in is reliable
+    most of the time but occasionally slow enough to blow past our request
+    timeout — doing the slow part here, off the user's request path, means
+    a slow fetch just delays the next background refresh instead of making
+    someone stare at a spinner."""
+    unique_states = sorted(set(CITY_STATE.values()))
+    while True:
+        for state in unique_states:
+            try:
+                fetch_agmarknet_prices(state)
+            except Exception as e:
+                print(f"[Market] Pre-warm error for state='{state}': {e}")
+            time.sleep(2)  # small gap between states — be polite to the API
+        # Refresh again a bit before the cache would actually expire, so
+        # there's never a gap where the cache is stale AND a user is
+        # waiting on a live fetch at the same time.
+        time.sleep(max(60, AGMARK_CACHE_TTL_SEC - 120))
+
+
 if __name__ == "__main__":
+    # Avoid starting two copies of the pre-warm thread when Flask's debug
+    # reloader spawns a child process — only start it in the actual
+    # serving process (or always, when the reloader isn't in play).
+    _is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    if not DEBUG_MODE or _is_reloader_child:
+        threading.Thread(target=_prewarm_market_cache, daemon=True).start()
     app.run(host="0.0.0.0", port=7860, debug=DEBUG_MODE)
