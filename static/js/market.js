@@ -1,39 +1,60 @@
-let allMarketData  = {};
-let marketChart    = null;
+let allMarketData = {};
+let marketChart = null;
 let activeChartType = 'line';
-let activeFilter   = 'all';
+let activeFilter = 'all';
 
-document.addEventListener('DOMContentLoaded', () => { loadMarkets(); setupSearch(); });
-
-async function loadMarkets() {
+// Wraps fetch() with a hard timeout via AbortController. Without this, if
+// data.gov.in (or the network path to it) hangs, the browser's fetch()
+// promise just never resolves or rejects — the UI is stuck on whatever
+// state it was already in, with no error and no way to recover except a
+// manual refresh. This guarantees the promise settles one way or another.
+async function fetchWithTimeout(url, ms = 20000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
   try {
-    const res  = await fetch('/api/market');
-    const data = await res.json();
-    allMarketData = data.markets || {};
-    document.getElementById('marketLoading').style.display='none';
-    document.getElementById('marketCitiesGrid').style.display='';
-    renderGrid(allMarketData);
-    buildTicker(allMarketData);
-    buildTable(allMarketData);
-    buildChart(allMarketData,'Delhi','line');
-  } catch(err) {
-    document.getElementById('marketLoading').innerHTML='<p style="color:var(--red)">Could not load prices. Please refresh.</p>';
+    const res = await fetch(url, { signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
   }
 }
+
+document.addEventListener('DOMContentLoaded', () => { loadMarkets();
+    setupSearch(); });
+
+async function loadMarkets() {
+    try {
+        const res = await fetchWithTimeout('/api/market', 20000);
+        const data = await res.json();
+        allMarketData = data.markets || {};
+        document.getElementById('marketLoading').style.display = 'none';
+        document.getElementById('marketCitiesGrid').style.display = '';
+        renderGrid(allMarketData);
+        buildTicker(allMarketData);
+        buildTable(allMarketData);
+        buildChart(allMarketData, 'Delhi', 'line');
+    } catch (err) {
+        const msg = err.name === 'AbortError'
+            ? 'Prices are taking too long to load (mandi data source is slow right now). <a href="#" onclick="location.reload();return false;">Retry</a>'
+            : 'Could not load prices. Please refresh.';
+        document.getElementById('marketLoading').innerHTML = `<p style="color:var(--red)">${msg}</p>`;
+    }
+}
+
 function renderGrid(markets) {
-  const grid = document.getElementById('marketCitiesGrid');
-  const none = document.getElementById('noResults');
-  if (!grid) return;
-  const entries = Object.entries(markets);
-  if (!entries.length) { grid.style.display='none'; if(none) none.style.display=''; return; }
-  if (none) none.style.display='none';
-  grid.innerHTML = entries.map(([city,crops],ci) => {
-    let filtered = crops;
-    if (activeFilter==='Very High') filtered=crops.filter(c=>c.demand==='Very High');
-    else if (activeFilter==='rising') filtered=crops.filter(c=>c.change>0);
-    else if (activeFilter==='falling') filtered=crops.filter(c=>c.change<0);
-    if (!filtered.length) return '';
-    return `<div class="city-card" style="animation-delay:${ci*0.06}s">
+    const grid = document.getElementById('marketCitiesGrid');
+    const none = document.getElementById('noResults');
+    if (!grid) return;
+    const entries = Object.entries(markets);
+    if (!entries.length) { grid.style.display = 'none'; if (none) none.style.display = ''; return; }
+    if (none) none.style.display = 'none';
+    grid.innerHTML = entries.map(([city, crops], ci) => {
+                let filtered = crops;
+                if (activeFilter === 'Very High') filtered = crops.filter(c => c.demand === 'Very High');
+                else if (activeFilter === 'rising') filtered = crops.filter(c => c.change > 0);
+                else if (activeFilter === 'falling') filtered = crops.filter(c => c.change < 0);
+                if (!filtered.length) return '';
+                return `<div class="city-card" style="animation-delay:${ci*0.06}s">
       <div class="city-card-header">
         <div class="city-name"><i class="fas fa-location-dot"></i> ${city}</div>
         <span class="city-count">${filtered.length} crops</span>
@@ -69,9 +90,21 @@ async function searchLocation() {
   const query = input?.value.trim();
   if (!query) { clearSearch(); return; }
   document.getElementById('clearSearchBtn').style.display='flex';
+
+  // Show a visible loading state — previously nothing changed on screen
+  // while the request was in flight, so a slow backend looked identical
+  // to a frozen page with no feedback at all.
+  document.getElementById('noResults').style.display='none';
+  document.getElementById('marketCitiesGrid').style.display='none';
+  document.getElementById('marketLoading').style.display='';
+  document.getElementById('marketLoading').innerHTML =
+    `<p>Searching for "${query}"…</p>`;
+
   try {
-    const res  = await fetch(`/api/market?location=${encodeURIComponent(query)}`);
+    const res  = await fetchWithTimeout(`/api/market?location=${encodeURIComponent(query)}`, 20000);
     const data = await res.json();
+    document.getElementById('marketLoading').style.display='none';
+    document.getElementById('marketCitiesGrid').style.display='';
     if (!data.markets||!Object.keys(data.markets).length) {
       document.getElementById('marketCitiesGrid').style.display='none';
       document.getElementById('noResults').style.display='';
@@ -83,7 +116,14 @@ async function searchLocation() {
       if (first) buildChart(data.markets,first,activeChartType);
       showToast(`Showing ${data.locations[0]}`, 'success');
     }
-  } catch { showToast('Search failed.','error'); }
+  } catch (err) {
+    document.getElementById('marketLoading').style.display='none';
+    document.getElementById('marketCitiesGrid').style.display='';
+    const msg = err.name === 'AbortError'
+      ? 'Search timed out — the mandi data source is slow right now. Try again.'
+      : 'Search failed.';
+    showToast(msg, 'error');
+  }
 }
 
 function clearSearch() {
@@ -173,7 +213,7 @@ function chartOpts(title) {
 function buildTable(markets) {
   const tbody=document.getElementById('priceTableBody');
   if (!tbody) return;
-  const cities=Object.keys(markets).slice(0,10);
+  const cities=Object.keys(markets);
   const cropSet=new Set(); Object.values(markets).forEach(crops=>crops.forEach(c=>cropSet.add(c.crop)));
   const lookup={};
   Object.entries(markets).forEach(([city,crops])=>{ lookup[city]={}; crops.forEach(c=>{lookup[city][c.crop]=c;}); });
