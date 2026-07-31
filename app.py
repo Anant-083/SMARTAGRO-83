@@ -1,5 +1,12 @@
 from flask import Flask, render_template, request, jsonify
 import requests
+
+# ── Windows fix: force IPv4 for outbound requests ───────────────────────────
+# If a browser reaches a URL instantly but Python's `requests` times out on
+# the exact same URL, it is almost always because requests/urllib3 tries
+# IPv6 first and your network's IPv6 path is broken or very slow, while the
+# browser silently falls back to IPv4 in milliseconds. This forces Python's
+# HTTP stack to only use IPv4, matching what the browser effectively does.
 try:
     import socket
     import urllib3.util.connection as urllib3_conn
@@ -389,6 +396,21 @@ MSP_REFERENCE = {
     "Cumin (Jeera)": 25000, "Coriander": 7000, "Banana": 2000, "Mango": 3000,
 }
 
+# Static reference prices shown ONLY when a state's live fetch fails
+# (timeout, network error, or the API returning nothing usable). Tagged
+# "msp_fallback" so you can tell live vs. fallback rows apart if needed.
+MSP_FALLBACK = [
+    {"crop": "Wheat",               "price": 2275, "change": 0.0},
+    {"crop": "Rice",                "price": 2300, "change": 0.0},
+    {"crop": "Maize (Corn)",        "price": 2090, "change": 0.0},
+    {"crop": "Mustard",             "price": 5650, "change": 0.0},
+    {"crop": "Groundnut",           "price": 6377, "change": 0.0},
+    {"crop": "Onion",               "price": 1800, "change": 0.0},
+    {"crop": "Potato",              "price": 1200, "change": 0.0},
+    {"crop": "Tomato",              "price": 2500, "change": 0.0},
+    {"crop": "Bengal Gram (Chana)", "price": 5440, "change": 0.0},
+]
+
 CITY_STATE = {
     "Delhi":         "Delhi",
     "Mumbai":        "Maharashtra",
@@ -418,6 +440,13 @@ _AGMARK_HISTORY_PATH = os.path.join(basedir, "market_history_cache.json")
 _agmark_history_lock = threading.Lock()
 _agmark_fetch_cache = {}          # {state: (timestamp, results)} — in-memory, 15 min
 AGMARK_CACHE_TTL_SEC = 15 * 60
+# Hard wall-clock ceiling for fetching ONE state, covering every candidate
+# name and every paginated page combined. Without this, a slow/half-hanging
+# data.gov.in response could keep the whole /api/market or search request
+# (and therefore the browser spinner) waiting indefinitely. If the budget
+# runs out mid-fetch, whatever records were already collected are used
+# instead of nothing — partial real data beats an infinite spinner.
+AGMARK_FETCH_BUDGET_SEC = 18
 
 
 def _load_history_cache():
@@ -461,43 +490,101 @@ def fetch_agmarknet_prices(state: str) -> list:
     if cached and (now - cached[0]) < AGMARK_CACHE_TTL_SEC:
         return cached[1]
 
+    # data.gov.in caps each response to whatever `limit` you ask for — a
+    # state on a busy reporting day can have well over 400 records across
+    # its mandis, so a single limit=400 call silently drops the rest. Page
+    # through with `offset` until the API stops returning full pages (or
+    # until `total` says we've got everything, or a hard safety cap is hit
+    # so one huge state can't stall every other request).
+    PAGE_SIZE = 500
+    MAX_PAGES = 8  # safety cap => up to 4000 records/state
+    fetch_deadline = time.monotonic() + AGMARK_FETCH_BUDGET_SEC
+
     records = []
     for candidate in STATE_NAME_CANDIDATES.get(state, [state]):
-        params = {
-            "api-key": DATA_GOV_API_KEY,
-            "format": "json",
-            "limit": 400,
-            "filters[state]": candidate,
-        }
-        try:
-            resp = _agmark_session.get(AGMARKNET_URL, params=params, timeout=15)
-            if resp.status_code != 200:
-                print(f"[Market] Agmarknet HTTP {resp.status_code} for state='{candidate}': {resp.text[:200]}")
-                continue
-            body = resp.json()
-            records = body.get("records", [])
-            if records:
-                print(f"[Market] Agmarknet: {len(records)} raw records for state='{candidate}' "
-                      f"(total available: {body.get('total', '?')})")
+        if time.monotonic() >= fetch_deadline:
+            print(f"[Market] Agmarknet: time budget used up before trying candidate='{candidate}' for {state}")
+            break
+        candidate_records = []
+        total_reported = None
+        offset = 0
+        for _page in range(MAX_PAGES):
+            remaining = fetch_deadline - time.monotonic()
+            if remaining <= 0:
+                print(f"[Market] Agmarknet: time budget ({AGMARK_FETCH_BUDGET_SEC}s) exhausted for "
+                      f"state='{candidate}' — using {len(candidate_records)} records collected so far")
                 break
-            else:
-                print(f"[Market] Agmarknet: 0 records for state='{candidate}' — trying next candidate if any")
-        except Exception as e:
-            print(f"[Market] Agmarknet error for state='{candidate}': {e}")
-            continue
+            params = {
+                "api-key": DATA_GOV_API_KEY,
+                "format": "json",
+                "limit": PAGE_SIZE,
+                "offset": offset,
+                "filters[state]": candidate,
+            }
+            try:
+                # Cap each individual call well under the overall budget so
+                # one slow/hanging request can't eat the whole thing itself.
+                resp = _agmark_session.get(AGMARKNET_URL, params=params, timeout=min(10, max(3, remaining)))
+            except Exception as e:
+                print(f"[Market] Agmarknet error for state='{candidate}' offset={offset}: {e}")
+                break
+            if resp.status_code != 200:
+                print(f"[Market] Agmarknet HTTP {resp.status_code} for state='{candidate}' offset={offset}: {resp.text[:200]}")
+                break
+            try:
+                body = resp.json()
+            except ValueError as e:
+                print(f"[Market] Agmarknet returned non-JSON for state='{candidate}' offset={offset}: {e}")
+                break
+
+            page_records = body.get("records", [])
+            total_reported = body.get("total", total_reported)
+            candidate_records.extend(page_records)
+
+            # Stop once a page comes back short (last page) or we've
+            # collected everything the API says exists.
+            if len(page_records) < PAGE_SIZE:
+                break
+            offset += PAGE_SIZE
+            try:
+                if total_reported is not None and offset >= int(total_reported):
+                    break
+            except (TypeError, ValueError):
+                pass
+
+        if candidate_records:
+            print(f"[Market] Agmarknet: {len(candidate_records)} raw records for state='{candidate}' "
+                  f"(API-reported total: {total_reported if total_reported is not None else '?'})")
+            records = candidate_records
+            break
+        else:
+            print(f"[Market] Agmarknet: 0 records for state='{candidate}' — trying next candidate if any")
 
     if not records:
         print(f"[Market] Agmarknet: no usable records for {state} after trying all name variants")
         return []
 
-    # A state has many markets/varieties reporting the same commodity —
-    # keep the most recent record per commodity.
+    # A state has many markets/varieties reporting the same commodity — keep
+    # the record with the most recent arrival_date per commodity. (Previously
+    # this just kept whichever record happened to appear last in the API's
+    # response order, which could silently overwrite a fresher price from a
+    # different mandi with a stale one.)
+    def _parse_arrival_date(raw):
+        if not raw:
+            return None
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(raw, fmt)
+            except (ValueError, TypeError):
+                continue
+        return None
+
     latest_by_commodity = {}
     skipped_no_price = 0
     for r in records:
         raw_name = str(r.get("commodity") or "").strip()
         modal = r.get("modal_price")
-        if not raw_name or modal in (None, ""):
+        if not raw_name or modal in (None, "", "NR", "N/A"):
             skipped_no_price += 1
             continue
         try:
@@ -507,17 +594,30 @@ def fetch_agmarknet_prices(state: str) -> list:
             continue
         if modal_price <= 0:
             continue
+
         display_name = AGMARK_COMMODITY_ALIASES.get(raw_name.lower(), raw_name.title())
+        this_date = _parse_arrival_date(r.get("arrival_date"))
+        existing = latest_by_commodity.get(display_name)
+
+        if existing is not None:
+            existing_date = existing.get("_parsed_date")
+            # Keep whichever record is genuinely newer. If dates are equal
+            # or unparseable on both sides, keep the first one seen instead
+            # of flip-flopping on every re-fetch.
+            if existing_date and (not this_date or this_date <= existing_date):
+                continue
+
         latest_by_commodity[display_name] = {
-            "market":       r.get("market") or "",
-            "district":     r.get("district") or "",
-            "arrival_date": r.get("arrival_date") or "",
-            "min_price":    r.get("min_price"),
-            "max_price":    r.get("max_price"),
-            "modal_price":  modal_price,
+            "market":        r.get("market") or "",
+            "district":      r.get("district") or "",
+            "arrival_date":  r.get("arrival_date") or "",
+            "min_price":     r.get("min_price"),
+            "max_price":     r.get("max_price"),
+            "modal_price":   modal_price,
+            "_parsed_date":  this_date,
         }
 
-    print(f"[Market] {state}: parsed {len(latest_by_commodity)} commodities, "
+    print(f"[Market] {state}: parsed {len(latest_by_commodity)} commodities from {len(records)} raw records, "
           f"skipped {skipped_no_price} records (missing/invalid price or name)")
 
     today_key = datetime.now().strftime("%Y-%m-%d")
@@ -574,15 +674,14 @@ def get_market_data():
 
     markets = {}
     live_total = 0
+    fallback_total = 0
 
-    # Fetch every unique state IN PARALLEL instead of one-by-one — with
-    # ~13 unique states and a government API that can be slow/overloaded,
-    # doing this sequentially could mean the whole page waits 12s x 13
-    # states in the worst case. Parallel fetching caps total wait time to
-    # roughly one slowest request instead of the sum of all of them.
+    # Fetch every unique state IN PARALLEL — kept modest (4 workers) since
+    # data.gov.in can choke / start timing out under too much simultaneous
+    # load, which is worse than fetching a bit more sequentially.
     unique_states = sorted({CITY_STATE.get(c, "") for c in cities})
     state_results_cache = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(unique_states) or 1)) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(unique_states) or 1)) as executor:
         future_to_state = {executor.submit(fetch_agmarknet_prices, s): s for s in unique_states}
         for future in concurrent.futures.as_completed(future_to_state):
             state = future_to_state[future]
@@ -595,10 +694,25 @@ def get_market_data():
     for city in cities:
         state = CITY_STATE.get(city, "")
         crops = list(state_results_cache.get(state, []))
+
         if not crops:
-            # This state's mandis haven't reported anything today — skip
-            # the city entirely rather than showing stale reference prices.
-            continue
+            # Live fetch failed (timeout/network error) or returned nothing
+            # for this state — show static reference prices instead of
+            # hiding the city entirely.
+            crops = [{
+                "crop":         fb["crop"],
+                "crop_key":     fb["crop"],
+                "price":        fb["price"],
+                "msp":          fb["price"],
+                "above_msp":    True,
+                "change":       fb["change"],
+                "history":      [fb["price"]],
+                "unit":         "Rs/quintal",
+                "source":       "msp_fallback",
+                "market":       "",
+                "district":     "",
+                "arrival_date": "",
+            } for fb in MSP_FALLBACK]
 
         city_crops = []
         for crop in crops:
@@ -610,14 +724,16 @@ def get_market_data():
             reverse=True
         )
         markets[city] = city_crops
-        live_total += len(city_crops)
+        live_total     += sum(1 for c in city_crops if c.get("source") == "agmarknet_live")
+        fallback_total += sum(1 for c in city_crops if c.get("source") == "msp_fallback")
 
     return jsonify({
-        "markets":     markets,
-        "locations":   list(markets.keys()),
-        "live_count":  live_total,
-        "fetched_at":  datetime.now().isoformat(),
-        "data_source": "Agmarknet — Ministry of Agriculture & Farmers Welfare, Govt. of India (data.gov.in)",
+        "markets":        markets,
+        "locations":      list(markets.keys()),
+        "live_count":     live_total,
+        "fallback_count": fallback_total,
+        "fetched_at":     datetime.now().isoformat(),
+        "data_source":    "Agmarknet — Ministry of Agriculture & Farmers Welfare, Govt. of India (data.gov.in)",
     })
 
 
