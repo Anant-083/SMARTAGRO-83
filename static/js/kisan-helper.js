@@ -64,6 +64,8 @@
 
     <div class="kw-messages" id="kisanMessages"></div>
 
+    <div class="kw-chips" id="kisanChips"></div>
+
     <div class="kw-input-bar">
       <button class="kw-mic-btn" id="kisanMicBtn" onclick="toggleKisanMic()" title="Voice">
         <i class="fas fa-microphone"></i>
@@ -183,6 +185,19 @@
   -webkit-tap-highlight-color: transparent;
 }
 .kw-lang-skip:active { color: #4ade80; }
+
+.kw-chips {
+  display: none; flex-wrap: wrap; gap: 6px; padding: 6px 12px 10px;
+  flex-shrink: 0;
+}
+.kw-chip {
+  background: rgba(74,222,128,.12); border: 1px solid rgba(74,222,128,.3);
+  color: #4ade80; border-radius: 16px; padding: 6px 12px; font-size: .72rem;
+  cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent;
+  transition: background .15s;
+}
+.kw-chip:active { background: rgba(74,222,128,.25); }
+body.light-theme .kw-chip { background: #ecfdf5; color: #166534; border-color: rgba(22,101,52,.25); }
 
 .kw-messages {
   flex: 1; overflow-y: auto; padding: 14px 12px;
@@ -383,7 +398,51 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     mni: 'ꯀꯨꯝꯖꯥ ꯂꯧꯅꯨ ꯂꯧꯔꯤꯕ ꯃꯔꯨꯑꯣꯏꯕ! ꯑꯩ SmartAgro ꯀꯤꯁꯥꯟ ꯃꯇꯦꯡ ꯄꯥꯡꯕꯥ ꯅꯤ। ꯅꯣꯡꯁꯤꯡ, ꯂꯧꯕꯨꯀ, ꯁꯦꯟꯂꯣꯟꯒꯤ ꯃꯌꯥꯏ ꯍꯪꯕꯤꯌꯨ꯫',
     bodo: 'नमस्कार बेसो रां! आं SmartAgro किसान हेल्पार। दिनै सिथिल, फिसा, बाजार दाम बेसेबा खालामनो हागौ।',
     doi: 'नमस्ते किसान भाई! मैं SmartAgro किसान सहायक आं। मौसम, फसल, बजार भाव बारै पुच्छो।',
-    sa: 'नमस्ते कृषकमित्र! अहं SmartAgro कृषकसहायकः अस्मि। वायुमण्डलं, कृषिं, विपणिमूल्यं वा सरकारीयोजनाः विषये पृच्छन्तु।',
+   sa: 'नमस्ते कृषकमित्र! अहं SmartAgro कृषकसहायकः अस्मि। वायुमण्डलं, कृषिं, विपणिमूल्यं वा सरकारीयोजनाः विषये पृच्छन्तु।',
+  };
+
+  const QUICK_CHIPS = {
+    en: [['🌤️ Weather','Today\'s weather'],['💰 Mandi Prices','Mandi prices near me'],['🌱 Crop Disease','My crop looks sick'],['🏛️ Schemes','Government schemes for farmers']],
+    hi: [['🌤️ मौसम','आज का मौसम'],['💰 मंडी भाव','मेरे पास मंडी भाव'],['🌱 फसल रोग','मेरी फसल बीमार लग रही है'],['🏛️ योजनाएं','किसानों के लिए सरकारी योजनाएं']],
+    bn: [['🌤️ আবহাওয়া','আজকের আবহাওয়া'],['💰 বাজার দর','কাছের বাজার দর'],['🌱 ফসলের রোগ','আমার ফসল অসুস্থ দেখাচ্ছে'],['🏛️ প্রকল্প','কৃষকদের জন্য সরকারি প্রকল্প']],
+    te: [['🌤️ వాతావరణం','ఈరోజు వాతావరణం'],['💰 మార్కెట్ ధరలు','నా దగ్గర మార్కెట్ ధరలు'],['🌱 పంట వ్యాధి','నా పంట అనారోగ్యంగా ఉంది'],['🏛️ పథకాలు','రైతుల కోసం ప్రభుత్వ పథకాలు']],
+    mr: [['🌤️ हवामान','आजचे हवामान'],['💰 बाजारभाव','जवळचे बाजारभाव'],['🌱 पीक रोग','माझे पीक आजारी दिसत आहे'],['🏛️ योजना','शेतकऱ्यांसाठी सरकारी योजना']],
+    ta: [['🌤️ வானிலை','இன்றைய வானிலை'],['💰 சந்தை விலை','அருகிலுள்ள சந்தை விலை'],['🌱 பயிர் நோய்','என் பயிர் நோய்வாய்ப்பட்டுள்ளது'],['🏛️ திட்டங்கள்','விவசாயிகளுக்கான அரசு திட்டங்கள்']],
+    gu: [['🌤️ હવામાન','આજનું હવામાન'],['💰 બજાર ભાવ','નજીકના બજાર ભાવ'],['🌱 પાક રોગ','મારો પાક બીમાર દેખાય છે'],['🏛️ યોજનાઓ','ખેડૂતો માટે સરકારી યોજનાઓ']],
+    kn: [['🌤️ ಹವಾಮಾನ','ಇಂದಿನ ಹವಾಮಾನ'],['💰 ಮಾರುಕಟ್ಟೆ ಬೆಲೆ','ಹತ್ತಿರದ ಮಾರುಕಟ್ಟೆ ಬೆಲೆ'],['🌱 ಬೆಳೆ ರೋಗ','ನನ್ನ ಬೆಳೆ ಅನಾರೋಗ್ಯದಿಂದ ಕಾಣುತ್ತಿದೆ'],['🏛️ ಯೋಜನೆಗಳು','ರೈತರಿಗೆ ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು']],
+    ml: [['🌤️ കാലാവസ്ഥ','ഇന്നത്തെ കാലാവസ്ഥ'],['💰 വിപണി വില','അടുത്തുള്ള വിപണി വില'],['🌱 വിള രോഗം','എന്റെ വിളയ്ക്ക് അസുഖം തോന്നുന്നു'],['🏛️ പദ്ധതികൾ','കർഷകർക്കുള്ള സർക്കാർ പദ്ധതികൾ']],
+    pa: [['🌤️ ਮੌਸਮ','ਅੱਜ ਦਾ ਮੌਸਮ'],['💰 ਮੰਡੀ ਭਾਅ','ਨੇੜੇ ਦੇ ਮੰਡੀ ਭਾਅ'],['🌱 ਫਸਲ ਰੋਗ','ਮੇਰੀ ਫਸਲ ਬਿਮਾਰ ਲੱਗ ਰਹੀ ਹੈ'],['🏛️ ਯੋਜਨਾਵਾਂ','ਕਿਸਾਨਾਂ ਲਈ ਸਰਕਾਰੀ ਯੋਜਨਾਵਾਂ']],
+    or: [['🌤️ ପାଣିପାଗ','ଆଜିର ପାଣିପାଗ'],['💰 ବଜାର ମୂଲ୍ୟ','ନିକଟସ୍ଥ ବଜାର ମୂଲ୍ୟ'],['🌱 ଫସଲ ରୋଗ','ମୋ ଫସଲ ଅସୁସ୍ଥ ଦେଖାଯାଉଛି'],['🏛️ ଯୋଜନା','କୃଷକଙ୍କ ପାଇଁ ସରକାରୀ ଯୋଜନା']],
+    as: [['🌤️ বতৰ','আজিৰ বতৰ'],['💰 বজাৰ দাম','ওচৰৰ বজাৰ দাম'],['🌱 শস্যৰ ৰোগ','মোৰ শস্য অসুস্থ যেন লাগিছে'],['🏛️ আঁচনি','কৃষকৰ বাবে চৰকাৰী আঁচনি']],
+    ur: [['🌤️ موسم','آج کا موسم'],['💰 منڈی بھاؤ','قریبی منڈی بھاؤ'],['🌱 فصل کی بیماری','میری فصل بیمار لگ رہی ہے'],['🏛️ اسکیمیں','کسانوں کے لیے سرکاری اسکیمیں']],
+    mai: [['🌤️ मौसम','आइ के मौसम'],['💰 बजार भाव','लगिच के बजार भाव'],['🌱 फसल रोग','हमर फसल बेमार लागि रहल अछि'],['🏛️ योजना','किसान क लेल सरकारी योजना']],
+    sat: [['🌤️ ᱨᱤᱢᱤᱞ','ᱛᱮᱦᱮᱸ ᱨᱤᱢᱤᱞ'],['💰 ᱦᱟᱴ ᱚᱲᱟᱜ','ᱧᱮᱲᱟᱜ ᱦᱟᱴ ᱚᱲᱟᱜ'],['🌱 ᱡᱟᱶᱨᱟ ᱨᱚᱜᱚ','ᱤᱧᱟᱜ ᱡᱟᱶᱨᱟ ᱵᱤᱨᱟᱢᱤ ᱠᱟᱱᱟ'],['🏛️ ᱦᱚᱲᱢᱚ','ᱪᱟᱥᱤ ᱞᱟᱹᱜᱤᱛ ᱥᱚᱨᱠᱟᱨᱤ ᱦᱚᱲᱢᱚ']],
+    ks: [['🌤️ موسم','آجَکُن موسم'],['💰 منڈی بھاؤ','نزدیکی منڈی بھاؤ'],['🌱 فصل بیماری','میۆن فصل بیمار چھُ'],['🏛️ سکیمہٕ','دہقانَن باپت سرکاری سکیمہٕ']],
+    ne: [['🌤️ मौसम','आजको मौसम'],['💰 बजार मूल्य','नजिकैको बजार मूल्य'],['🌱 बाली रोग','मेरो बाली बिरामी देखिन्छ'],['🏛️ योजना','किसानका लागि सरकारी योजना']],
+    sd: [['🌤️ موسم','اڄ جو موسم'],['💰 بازار قيمتون','ويجهي بازار قيمتون'],['🌱 फसल बीमारी','मेरी फसल बीमार लग रही आहे'],['🏛️ اسڪيمون','هارين لاءِ سرڪاري اسڪيمون']],
+    kok: [['🌤️ हवामान','आयचें हवामान'],['💰 बाजारभाव','लागसारचो बाजारभाव'],['🌱 पिकाचो रोग','म्हजें पीक आजारी दिसता'],['🏛️ येवजण्यो','शेतकऱ्यांखातीर सरकारी येवजण्यो']],
+    mni: [['🌤️ ꯅꯣꯡꯁꯤꯡ','ꯅꯣꯡꯃꯥ ꯅꯣꯡꯁꯤꯡ'],['💰 ꯁꯦꯟꯂꯣꯟ ꯃꯌꯥꯏ','ꯅꯛꯅꯕ ꯁꯦꯟꯂꯣꯟ ꯃꯌꯥꯏ'],['🌱 ꯂꯧꯕꯨꯛ ꯀꯤ ꯓꯤ','ꯑꯩꯒꯤ ꯂꯧꯕꯨꯛ ꯅꯥꯕ ꯎꯠꯂꯤ'],['🏛️ ꯄꯂꯦꯟ','ꯂꯧꯆꯤꯡꯕꯁꯤꯡꯒꯤꯗꯃꯛ ꯁꯔꯀꯥꯔꯒꯤ ꯄꯂꯦꯟ']],
+    bodo: [['🌤️ दिनै सिथिल','दिनैनि सिथिल'],['💰 बाजार दाम','हाबाथाव बाजार दाम'],['🌱 फिसा हाबि','आंनि फिसा हाबि जायो'],['🏛️ आयदा','हास्लायाव आयदा']],
+    doi: [['🌤️ मौसम','अज्जै दा मौसम'],['💰 बजार भाव','नेड़्डे बजार भाव'],['🌱 फसल रोग','मेरी फसल बीमार लगदी ऐ'],['🏛️ योजनां','किसानां आस्तै सरकारी योजनां']],
+    sa: [['🌤️ वायुमण्डलम्','अद्यतनम् वायुमण्डलम्'],['💰 विपणिमूल्यम्','समीपस्थं विपणिमूल्यम्'],['🌱 कृषिरोगः','मम कृषिः रुग्णा दृश्यते'],['🏛️ योजनाः','कृषकाणां कृते सरकारीयोजनाः']],
+  };
+
+  function renderQuickChips() {
+    const box = document.getElementById('kisanChips');
+    if (!box) return;
+    const lang  = getAppLang();
+    const chips = QUICK_CHIPS[lang] || QUICK_CHIPS.en;
+    box.innerHTML = chips.map(([label, msg]) =>
+      `<button class="kw-chip" onclick="sendKisanQuickMsg('${msg.replace(/'/g, "\\'")}')">${label}</button>`
+    ).join('');
+    box.style.display = 'flex';
+  }
+
+  window.sendKisanQuickMsg = function (text) {
+    const input = document.getElementById('kisanInput');
+    if (input) { input.value = text; window.sendKisanMessage(); }
+    const box = document.getElementById('kisanChips');
+    if (box) box.style.display = 'none';
   };
 
   function getAppLang() {
@@ -498,16 +557,17 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     picker.style.display = 'block';
   }
 
-  function pickLang(code) {
-    chosenLang = code;
-    langChosen = true;
-    localStorage.setItem('agrosmart_lang', code);
-    const picker = document.getElementById('kisanLangPicker');
-    if (picker) picker.style.display = 'none';
-    updateSubLabel(code);
-    addBotMsg(GREETINGS[code] || GREETINGS.en);
-  }
-
+ 
+function pickLang(code) {
+  chosenLang = code;
+  langChosen = true;
+  localStorage.setItem('agrosmart_lang', code);
+  const picker = document.getElementById('kisanLangPicker');
+  if (picker) picker.style.display = 'none';
+   updateSubLabel(code);
+   addBotMsg(GREETINGS[code] || GREETINGS.en);
+   renderQuickChips();
+}
   function updateSubLabel(lang) {
     const el = document.getElementById('kisanLangLabel');
     if (el) el.textContent = 'Answering in ' + (LANG_ROMAN[lang] || lang.toUpperCase());
@@ -626,6 +686,8 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     const msg   = input?.value.trim();
     if (!msg) return;
     input.value = '';
+    const chipsBox = document.getElementById('kisanChips');
+    if (chipsBox) chipsBox.style.display = 'none';
 
     if (!langChosen) {
       chosenLang = localStorage.getItem('agrosmart_lang') || 'en';
@@ -674,49 +736,77 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     }
   };
 
-  /* ── Text to Speech ───────────────────────────────────────────────── */
-  window.toggleSpeak = function (msgId) {
+/* ── Text to Speech — server-side (works on every device/OS) ────────
+     Falls back to browser speechSynthesis only if the server call fails
+     (e.g. offline), so it degrades gracefully instead of going silent. */
+  let currentAudio = null;
+
+  window.toggleSpeak = async function (msgId) {
     const div = document.getElementById(msgId);
     const btn = document.getElementById('speak_' + msgId);
     if (!div || !btn) return;
 
     if (speakingMsgId === msgId) { stopSpeaking(); return; }
     stopSpeaking();
-    if (activeTyper) activeTyper.finish(); // don't speak over a half-typed bubble
+    if (activeTyper) activeTyper.finish();
 
     const rawText = div.dataset.text || '';
     const text    = cleanTextForSpeech(rawText);
-    if (!text || !window.speechSynthesis) return;
+    if (!text) return;
 
-    const lang       = getAppLang();
-    const voice      = getBestVoice(lang);
-    const speechLang = VOICE_LANGS[lang] || 'en-IN';
+    const lang = getAppLang();
 
-    const utterance  = new SpeechSynthesisUtterance(text);
-    utterance.lang   = speechLang;
-    utterance.rate   = 0.88;
-    utterance.pitch  = 1;
-    if (voice) utterance.voice = voice;
+    speakingMsgId = msgId;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    btn.classList.add('speaking');
 
-    if (!voice && lang !== 'en') {
-      showKisanToast(`No ${LANG_ROMAN[lang] || lang} voice on this device. Using available voice.`);
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, lang })
+      });
+      if (!res.ok) throw new Error('tts-failed');
+
+      const blob = await res.blob();
+      const audio = new Audio(URL.createObjectURL(blob));
+      currentAudio = audio;
+
+      audio.onplay = () => {
+        btn.innerHTML = '<i class="fas fa-stop"></i>';
+      };
+      audio.onended = audio.onerror = () => {
+        speakingMsgId = null;
+        btn.innerHTML = '<i class="fas fa-volume-up"></i>';
+        btn.classList.remove('speaking');
+      };
+      await audio.play();
+    } catch (err) {
+      if (window.speechSynthesis) {
+        const voice      = getBestVoice(lang);
+        const speechLang = VOICE_LANGS[lang] || 'en-IN';
+        const utterance  = new SpeechSynthesisUtterance(text);
+        utterance.lang   = speechLang;
+        utterance.rate   = 0.88;
+        if (voice) utterance.voice = voice;
+        utterance.onstart = () => { btn.innerHTML = '<i class="fas fa-stop"></i>'; };
+        utterance.onend = utterance.onerror = () => {
+          speakingMsgId = null;
+          btn.innerHTML = '<i class="fas fa-volume-up"></i>';
+          btn.classList.remove('speaking');
+        };
+        window.speechSynthesis.speak(utterance);
+      } else {
+        speakingMsgId = null;
+        btn.innerHTML = '<i class="fas fa-volume-up"></i>';
+        btn.classList.remove('speaking');
+        showKisanToast('Voice unavailable. Check your connection.');
+      }
     }
-
-    utterance.onstart = () => {
-      speakingMsgId = msgId;
-      btn.innerHTML = '<i class="fas fa-stop"></i>';
-      btn.classList.add('speaking');
-    };
-    utterance.onend = utterance.onerror = () => {
-      speakingMsgId = null;
-      btn.innerHTML = '<i class="fas fa-volume-up"></i>';
-      btn.classList.remove('speaking');
-    };
-
-    window.speechSynthesis.speak(utterance);
   };
 
   function stopSpeaking() {
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     if (speakingMsgId) {
       const btn = document.getElementById('speak_' + speakingMsgId);
@@ -724,7 +814,6 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
       speakingMsgId = null;
     }
   }
-
   /* ── Voice Input — live captions while speaking ──────────────────── */
   window.toggleKisanMic = function () {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
