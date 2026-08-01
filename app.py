@@ -1,22 +1,14 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 import requests
-
-# ── Windows fix: force IPv4 for outbound requests ───────────────────────────
-# If a browser reaches a URL instantly but Python's `requests` times out on
-# the exact same URL, it is almost always because requests/urllib3 tries
-# IPv6 first and your network's IPv6 path is broken or very slow, while the
-# browser silently falls back to IPv4 in milliseconds. This forces Python's
-# HTTP stack to only use IPv4, matching what the browser effectively does.
+import edge_tts
+import asyncio
+import io
+import json as _json
 try:
-    import socket
-    import urllib3.util.connection as urllib3_conn
-
-    def _allowed_gai_family():
-        return socket.AF_INET  # IPv4 only
-
-    urllib3_conn.allowed_gai_family = _allowed_gai_family
-except Exception as _e:
-    print(f"[AgroSmart] Could not force IPv4 (non-fatal): {_e}")
+    from pywebpush import webpush, WebPushException
+    _PUSH_AVAILABLE = True
+except ImportError:
+    _PUSH_AVAILABLE = False
 import os
 import json
 import re
@@ -819,20 +811,19 @@ def kisan_chat():
         return jsonify({"error": "No messages"}), 400
 
     lang_name = LANG_NAMES.get(lang, "English")
-
-    system_prompt = f"""You are Kisan Helper, a friendly AI agricultural assistant for Indian farmers built into SmartAgro app.
-The user may write to you in ANY language or mix of languages — Hindi, English, Bengali, Tamil, or any other.
-No matter what language the user writes in, you MUST always reply ONLY in {lang_name}, using its native script (not transliteration).
-You help farmers with: crop diseases, weather advice, pesticide usage, market prices, government schemes (PM-KISAN, Fasal Bima Yojana, Kisan Credit Card), soil health, irrigation, seasonal crop recommendations.
-Keep answers practical, simple, and farmer-friendly. Use bullet points for lists.
-Always be warm and address the farmer respectfully. Never use markdown headers. Keep responses under 200 words."""
+    system_prompt = f"""You are SmartAgro Assistant, a warm and knowledgeable friend to Indian farmers.
+Reply in {lang_name}, in its native script (not transliteration). Keep it natural and conversational —
+like a helpful neighbour talking to another, not a formal report. Short, practical, encouraging.
+You know about: crop diseases, weather, pesticide usage, mandi prices, government schemes
+(PM-KISAN, Fasal Bima Yojana, Kisan Credit Card), soil health, irrigation, seasonal crops.
+Use bullet points only when listing several items. Keep responses under 200 words."""
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     body = {
-        "model":       "openai/gpt-oss-120b",
+        "model":       "llama-3.3-70b-versatile",
         "messages":    [{"role": "system", "content": system_prompt}] + messages,
-        "temperature": 0.7,
-        "max_tokens":  400,
+        "temperature": 0.75,
+        "max_tokens":  450,
         "stream":      False
     }
     try:
@@ -845,6 +836,105 @@ Always be warm and address the farmer respectfully. Never use markdown headers. 
         return jsonify({"error": str(e)}), 500
 
 
+# ─── Kisan Helper — Text-to-Speech (Edge TTS, free, no API key) ─────────────
+_TTS_VOICE_MAP = {
+    'en': 'en-IN-NeerjaNeural',    'hi': 'hi-IN-MadhurNeural',
+    'bn': 'bn-IN-BashkarNeural',   'te': 'te-IN-MohanNeural',
+    'mr': 'mr-IN-ManoharNeural',   'ta': 'ta-IN-ValluvarNeural',
+    'gu': 'gu-IN-NiranjanNeural',  'kn': 'kn-IN-GaganNeural',
+    'ml': 'ml-IN-MidhunNeural',    'pa': 'pa-IN-OjasNeural',
+    'or': 'or-IN-SubhasiniNeural', 'as': 'as-IN-YashicaNeural',
+    'ur': 'ur-IN-GulNeural',
+}
+_TTS_FALLBACK_MAP = {
+    'mai': 'hi-IN-MadhurNeural', 'sat': 'hi-IN-MadhurNeural',
+    'ks':  'ur-IN-GulNeural',    'ne':  'hi-IN-MadhurNeural',
+    'sd':  'hi-IN-MadhurNeural', 'kok': 'mr-IN-ManoharNeural',
+    'mni': 'bn-IN-BashkarNeural','bodo':'hi-IN-MadhurNeural',
+    'doi': 'hi-IN-MadhurNeural', 'sa':  'hi-IN-MadhurNeural',
+}
+
+def _get_tts_voice(lang):
+    return _TTS_VOICE_MAP.get(lang) or _TTS_FALLBACK_MAP.get(lang) or 'en-IN-NeerjaNeural'
+
+
+@app.route("/api/tts", methods=["POST"])
+def text_to_speech():
+    data = request.json or {}
+    text = (data.get("text") or "").strip()
+    lang = data.get("lang", "en")
+    if not text:
+        return jsonify({"error": "No text"}), 400
+    if len(text) > 2000:
+        text = text[:2000]
+
+    voice = _get_tts_voice(lang)
+
+    async def _generate():
+        communicate = edge_tts.Communicate(text, voice)
+        audio_bytes = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_bytes += chunk["data"]
+        return audio_bytes
+
+    try:
+        audio = asyncio.run(_generate())
+        if not audio:
+            return jsonify({"error": "No audio generated"}), 500
+        return send_file(io.BytesIO(audio), mimetype="audio/mpeg")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── Push Notifications (Web Push standard, free, no card) ──────────────────
+_push_subscriptions = []
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_PUBLIC_KEY  = os.getenv("VAPID_PUBLIC_KEY", "")
+VAPID_CLAIMS = {"sub": "mailto:smartagro@example.com"}
+
+
+@app.route("/api/vapid-public-key", methods=["GET"])
+def vapid_public_key():
+    return jsonify({"key": VAPID_PUBLIC_KEY})
+
+
+@app.route("/api/subscribe", methods=["POST"])
+def push_subscribe():
+    sub = request.json
+    if not sub:
+        return jsonify({"error": "No subscription data"}), 400
+    if sub not in _push_subscriptions:
+        _push_subscriptions.append(sub)
+    return jsonify({"status": "subscribed", "total": len(_push_subscriptions)})
+
+
+@app.route("/api/send-alert", methods=["POST"])
+def push_send_alert():
+    if not _PUSH_AVAILABLE:
+        return jsonify({"error": "pywebpush not installed"}), 500
+    if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
+        return jsonify({"error": "VAPID keys not configured"}), 500
+
+    data  = request.json or {}
+    title = data.get("title", "SmartAgro Alert")
+    body  = data.get("body", "")
+    sent, failed = 0, 0
+
+    for sub in list(_push_subscriptions):
+        try:
+            webpush(
+                subscription_info=sub,
+                data=_json.dumps({"title": title, "body": body}),
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims=VAPID_CLAIMS
+            )
+            sent += 1
+        except WebPushException:
+            failed += 1
+            if sub in _push_subscriptions:
+                _push_subscriptions.remove(sub)
+    return jsonify({"status": "sent", "sent": sent, "failed": failed})
 # ─── Kisan Helper — Speech-to-Text (Groq Whisper) ────────────────────────────
 # Works identically on every OS/browser because the audio is recorded with the
 # standard MediaRecorder API (supported on Chrome, Safari/iOS, Firefox, Edge,
