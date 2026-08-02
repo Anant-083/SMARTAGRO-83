@@ -132,6 +132,7 @@ def get_weather():
         print(f"[Weather error] {e}")
         return jsonify({"error": str(e)}), 500
 
+
 # ─── NASA POWER Climate Data (long-term climatology, no API key needed) ─────
 _power_cache = {}
 POWER_CACHE_TTL_SEC = 24 * 60 * 60  # climatology barely changes; cache a day
@@ -177,6 +178,109 @@ def get_power_climate(lat, lon):
     except Exception as e:
         print(f"[POWER] error: {e}")
         return None
+
+
+# ─── Vegetation Health (NASA MODIS NDVI via ORNL DAAC, no API key needed) ──
+# This uses point-based NDVI values (a single number describing how green/
+# healthy vegetation is at this spot), NOT raw satellite image processing —
+# genuinely lightweight enough to run on a free-tier server, unlike full
+# NDVI-from-imagery pipelines which need real remote-sensing compute.
+_ndvi_cache = {}
+NDVI_CACHE_TTL_SEC = 12 * 60 * 60
+
+def get_vegetation_index(lat, lon):
+    """Fetch the most recent MODIS NDVI (vegetation health) reading for this
+    point from ORNL DAAC's public MODIS subset service. Returns None on any
+    failure — this is a nice-to-have overlay, never a blocker."""
+    if lat is None or lon is None:
+        return None
+
+    cache_key = f"{round(float(lat), 2)}|{round(float(lon), 2)}"
+    now = time.monotonic()
+    cached = _ndvi_cache.get(cache_key)
+    if cached and (now - cached[0]) < NDVI_CACHE_TTL_SEC:
+        return cached[1]
+
+    base = "https://modis.ornl.gov/rst/api/v1/MOD13Q1"
+    try:
+        # Step 1: find the most recent available date for this point
+        dates_resp = requests.get(f"{base}/dates", params={"latitude": lat, "longitude": lon}, timeout=10)
+        if dates_resp.status_code != 200:
+            return None
+        dates = dates_resp.json().get("dates", [])
+        if not dates:
+            return None
+        latest = dates[-1]["modis_date"]
+
+        # Step 2: fetch the actual NDVI value for that date
+        subset_resp = requests.get(
+            f"{base}/subset",
+            params={
+                "latitude": lat, "longitude": lon,
+                "startDate": latest, "endDate": latest,
+                "kmAboveBelow": 0, "kmLeftRight": 0,
+                "band": "250m_16_days_NDVI",
+            },
+            timeout=10,
+        )
+        if subset_resp.status_code != 200:
+            return None
+        subset = subset_resp.json().get("subset", [])
+        if not subset or not subset[0].get("data"):
+            return None
+
+        raw_val = subset[0]["data"][0]
+        if raw_val in (None, -3000):  # MODIS fill/no-data value
+            return None
+        ndvi = round(raw_val * 0.0001, 3)  # MODIS NDVI scale factor
+
+        if ndvi < 0.2:
+            health = "Bare soil / no vegetation"
+        elif ndvi < 0.4:
+            health = "Sparse vegetation"
+        elif ndvi < 0.6:
+            health = "Moderate vegetation"
+        else:
+            health = "Dense, healthy vegetation"
+
+        result = {
+            "ndvi": ndvi,
+            "health_label": health,
+            "date": subset[0].get("calendar_date"),
+            "note": "Reflects whatever is currently growing on this land (or bare soil) — "
+                    "not a prediction of future crop health.",
+        }
+        _ndvi_cache[cache_key] = (now, result)
+        return result
+    except Exception as e:
+        print(f"[NDVI] error: {e}")
+        return None
+
+
+@app.route("/farm-map")
+def farm_map():
+    return render_template("farm_map.html")
+
+
+@app.route("/api/area-details")
+def area_details():
+    """Combined endpoint for the Farm Map page: climate normals + vegetation
+    health for a given point. Crop recommendations still go through the
+    existing /api/crop-recommendations endpoint (reused as-is)."""
+    lat = request.args.get("lat")
+    lon = request.args.get("lon")
+    if not lat or not lon:
+        return jsonify({"error": "Location required"}), 400
+
+    power_climate = get_power_climate(lat, lon)
+    vegetation = get_vegetation_index(lat, lon)
+
+    return jsonify({
+        "power_climate": power_climate,
+        "vegetation": vegetation,
+    })
+
+
 # ─── Sowing Safety Check ──────────────────────────────────────────────────
 @app.route("/api/sowing-check")
 def sowing_check():
@@ -246,7 +350,7 @@ def ai_recommend_crops(city, lat, lon, temp, humidity, rain, season,
         return None
 
     soil_bucket = f"{n}|{p}|{k}|{ph}" if any(v is not None for v in (n, p, k, ph)) else "none"
-    power_bucket = f"{round(power_climate['avg_temp_c'],1)}|{round(power_climate['avg_rain_mm'],1)}" if power_climate else "none"
+    power_bucket = f"{round(power_climate['avg_temp_c'],1)}|{round(power_climate['avg_rain_mm'],1)}" if power_climate and power_climate.get("avg_temp_c") is not None else "none"
     cache_key = (f"{city}|{round((lat or 0), 1)}|{round((lon or 0), 1)}|{season}|"
                  f"{round(temp/3)*3}|{round(humidity/10)*10}|{soil_bucket}|{power_bucket}")
     now = time.monotonic()
@@ -342,7 +446,7 @@ exactly this shape:
     except Exception as e:
         print(f"[CropAI] error for {city}: {e}")
         return None
-        
+
 
 def scale_for_land(crops, land_size, land_unit):
     """Convert per-hectare figures into actual totals for the farmer's plot.
@@ -353,7 +457,6 @@ def scale_for_land(crops, land_size, land_unit):
         size = float(land_size)
     except (TypeError, ValueError):
         return crops
-    # normalise to hectares
     unit = (land_unit or "acre").lower()
     to_hectare = {"acre": 0.4047, "hectare": 1.0, "bigha": 0.1338}
     hectares = size * to_hectare.get(unit, 0.4047)
@@ -404,7 +507,8 @@ def crop_recommendations():
         "power_climate":  power_climate, # None if unavailable — frontend should handle gracefully
         "soil_used":      any(v is not None for v in (n, p, k, ph)),
     })
-    
+
+
 def get_season(month):
     if month in [6, 7, 8, 9]:
         return "Kharif (Monsoon)"
