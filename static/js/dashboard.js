@@ -278,6 +278,73 @@ async function loadWeatherAndCrops(lat, lon) {
     loadSowingCheck(lat, lon);
     loadCropRecommendations(data.current);
 }
+
+/* ── Location map (Leaflet, no API key needed) ─ */
+let _locationMapInstance = null;
+function renderLocationMap(lat, lon) {
+    const el = document.getElementById('locationMap');
+    if (!el || typeof L === 'undefined') return;
+
+    if (_locationMapInstance) {
+        _locationMapInstance.setView([lat, lon], 12);
+        _locationMapInstance.eachLayer(layer => {
+            if (layer instanceof L.Marker) _locationMapInstance.removeLayer(layer);
+        });
+    } else {
+        _locationMapInstance = L.map('locationMap').setView([lat, lon], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            maxZoom: 18,
+        }).addTo(_locationMapInstance);
+    }
+    L.marker([lat, lon]).addTo(_locationMapInstance)
+        .bindPopup(dt('Your farm location')).openPopup();
+}
+
+/* ── NASA POWER climate normals card ───────────── */
+function renderClimateNormals(power) {
+    const card = document.getElementById('climateNormalsCard');
+    if (!card) return;
+    if (!power || power.avg_temp_c === null || power.avg_temp_c === undefined) {
+        card.style.display = 'none';
+        return;
+    }
+    card.style.display = '';
+    card.innerHTML = `
+      <h4><i class="fas fa-satellite"></i> ${dt('Typical Climate for Your Area')} <span style="font-weight:400;font-size:0.75rem;color:var(--text-3)">(NASA POWER, long-term average)</span></h4>
+      <div class="climate-normals-row">
+        <div><i class="fas fa-temperature-half"></i> ${dt('Avg Temp')}: ${power.avg_temp_c}°C</div>
+        <div><i class="fas fa-droplets"></i> ${dt('Avg Rainfall')}: ${power.avg_rain_mm} mm/day</div>
+        <div><i class="fas fa-water"></i> ${dt('Avg Humidity')}: ${power.avg_humidity}%</div>
+      </div>`;
+}
+
+/* ── Sowing Safety Check ────────────────────────── */
+async function loadSowingCheck(lat, lon) {
+    const card = document.getElementById('sowingCheckCard');
+    if (!card) return;
+    card.style.display = '';
+    card.innerHTML = `<div class="loading-spinner" style="width:24px;height:24px;"></div>`;
+    try {
+        const res = await fetch(`/api/sowing-check?lat=${lat}&lon=${lon}`);
+        const data = await res.json();
+        if (data.error) { card.style.display = 'none'; return; }
+
+        const safe = data.verdict === 'safe';
+        card.innerHTML = `
+          <div class="sowing-verdict ${safe ? 'safe' : 'unsafe'}">
+            <i class="fas ${safe ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
+            <div>
+              <strong>${safe ? dt('Good conditions for sowing') : dt('Hold off on sowing')}</strong>
+              <p>${dt(data.message)}</p>
+            </div>
+          </div>`;
+    } catch (err) {
+        console.error('Sowing check error:', err);
+        card.style.display = 'none';
+    }
+}
+
 /* ── Hero weather card ──────────────────────── */
 function showHeroLoading() {
     const card = document.getElementById('heroWeatherCard');
@@ -414,89 +481,9 @@ function renderStatBar(w) {
     setVal('statVisibility', `${w.visibility.toFixed(1)} km`);
     setVal('statPressure', `${w.pressure} hPa`);
 }
-/* ── Location map (Leaflet, no API key needed) ─ */
-let _locationMapInstance = null;
-function renderLocationMap(lat, lon) {
-    const el = document.getElementById('locationMap');
-    if (!el || typeof L === 'undefined') return;
 
-    if (_locationMapInstance) {
-        _locationMapInstance.setView([lat, lon], 12);
-        _locationMapInstance.eachLayer(layer => {
-            if (layer instanceof L.Marker) _locationMapInstance.removeLayer(layer);
-        });
-    } else {
-        _locationMapInstance = L.map('locationMap').setView([lat, lon], 12);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap contributors',
-            maxZoom: 18,
-        }).addTo(_locationMapInstance);
-    }
-    L.marker([lat, lon]).addTo(_locationMapInstance)
-        .bindPopup(dt('Your farm location')).openPopup();
-}
-
-/* ── NASA POWER climate normals card ───────────── */
-function renderClimateNormals(power) {
-    const card = document.getElementById('climateNormalsCard');
-    if (!card) return;
-    if (!power || power.avg_temp_c === null || power.avg_temp_c === undefined) {
-        card.style.display = 'none';
-        return;
-    }
-    card.style.display = '';
-    card.innerHTML = `
-      <h4><i class="fas fa-satellite"></i> ${dt('Typical Climate for Your Area')} <span style="font-weight:400;font-size:0.75rem;color:var(--text-3)">(NASA POWER, long-term average)</span></h4>
-      <div class="climate-normals-row">
-        <div><i class="fas fa-temperature-half"></i> ${dt('Avg Temp')}: ${power.avg_temp_c}°C</div>
-        <div><i class="fas fa-droplets"></i> ${dt('Avg Rainfall')}: ${power.avg_rain_mm} mm/day</div>
-        <div><i class="fas fa-water"></i> ${dt('Avg Humidity')}: ${power.avg_humidity}%</div>
-      </div>`;
-}
-
-/* ── Sowing Safety Check ────────────────────────── */
-async function loadSowingCheck(lat, lon) {
-    const card = document.getElementById('sowingCheckCard');
-    if (!card) return;
-    card.style.display = '';
-    card.innerHTML = `<div class="loading-spinner" style="width:24px;height:24px;"></div>`;
-    try {
-        const res = await fetch(`/api/sowing-check?lat=${lat}&lon=${lon}`);
-        const data = await res.json();
-        if (data.error) { card.style.display = 'none'; return; }
-
-        const safe = data.verdict === 'safe';
-        card.innerHTML = `
-          <div class="sowing-verdict ${safe ? 'safe' : 'unsafe'}">
-            <i class="fas ${safe ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
-            <div>
-              <strong>${safe ? dt('Good conditions for sowing') : dt('Hold off on sowing')}</strong>
-              <p>${dt(data.message)}</p>
-            </div>
-          </div>`;
-    } catch (err) {
-        console.error('Sowing check error:', err);
-        card.style.display = 'none';
-    }
-}
 /* ── Crop Recommendations ───────────────────── */
-/* ── Crop Recommendations ───────────────────── */
-let _lastWeatherCurrent = null;
-
-function getSoilFormValues() {
-    const val = id => {
-        const el = document.getElementById(id);
-        return el && el.value !== '' ? el.value : null;
-    };
-    return {
-        n: val('soilN'), p: val('soilP'), k: val('soilK'), ph: val('soilPh'),
-        land_size: val('landSize'), land_unit: (document.getElementById('landUnit') || {}).value || 'acre',
-    };
-}
-
 async function loadCropRecommendations(current) {
-    _lastWeatherCurrent = current;
-    const soil = getSoilFormValues();
     try {
         const res = await fetch('/api/crop-recommendations', {
             method: 'POST',
@@ -508,8 +495,6 @@ async function loadCropRecommendations(current) {
                 city: current.city,
                 lat: current.lat,
                 lon: current.lon,
-                n: soil.n, p: soil.p, k: soil.k, ph: soil.ph,
-                land_size: soil.land_size, land_unit: soil.land_unit,
             })
         });
         const data = await res.json();
@@ -526,24 +511,6 @@ async function loadCropRecommendations(current) {
         showToast('Could not load crop recommendations.', 'error');
     }
 }
-
-/* ── Soil form toggle + submit ──────────────── */
-document.addEventListener('DOMContentLoaded', () => {
-    const toggle = document.getElementById('soilFormToggle');
-    const body = document.getElementById('soilFormBody');
-    if (toggle && body) {
-        toggle.addEventListener('click', () => {
-            body.style.display = body.style.display === 'none' ? '' : 'none';
-        });
-    }
-    const submitBtn = document.getElementById('soilFormSubmit');
-    if (submitBtn) {
-        submitBtn.addEventListener('click', () => {
-            if (_lastWeatherCurrent) loadCropRecommendations(_lastWeatherCurrent);
-            else showToast('Please get your location first.', 'warning');
-        });
-    }
-});
 
 /* ── Render crop cards ──────────────────────── */
 function renderCrops(data) {
