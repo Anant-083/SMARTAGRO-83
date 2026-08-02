@@ -348,7 +348,7 @@ AGMARKNET_URL = f"https://api.data.gov.in/resource/{AGMARKNET_RESOURCE_ID}"
 # hiccups instead of failing on the first slow attempt.
 _agmark_session = requests.Session()
 _agmark_retry = requests.adapters.Retry(
-    total=2, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]
+    total=1, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]
 )
 _agmark_session.mount("https://", requests.adapters.HTTPAdapter(max_retries=_agmark_retry))
 
@@ -546,7 +546,7 @@ def fetch_agmarknet_prices(state: str) -> list:
             "filters[state]": candidate,
         }
         try:
-            resp = _agmark_session.get(AGMARKNET_URL, params=params, timeout=15)
+            resp = _agmark_session.get(AGMARKNET_URL, params=params, timeout=8)
             if resp.status_code != 200:
                 print(f"[Market] Agmarknet HTTP {resp.status_code} for state='{candidate}': {resp.text[:200]}")
                 continue
@@ -684,7 +684,7 @@ def get_market_data():
         unique_states = sorted({CITY_STATE.get(c, "") for c in cities if CITY_STATE.get(c, "")})
         state_results_cache = {}
         if unique_states:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(unique_states))) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(unique_states)) as executor:
                 future_to_state = {executor.submit(fetch_agmarknet_prices, s): s for s in unique_states}
                 for future in concurrent.futures.as_completed(future_to_state):
                     state = future_to_state[future]
@@ -1664,4 +1664,3 @@ def translate_diagnosis_result():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7860, debug=DEBUG_MODE)
-    
