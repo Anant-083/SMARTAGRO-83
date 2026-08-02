@@ -132,34 +132,157 @@ def get_weather():
         print(f"[Weather error] {e}")
         return jsonify({"error": str(e)}), 500
 
+# ─── NASA POWER Climate Data (long-term climatology, no API key needed) ─────
+_power_cache = {}
+POWER_CACHE_TTL_SEC = 24 * 60 * 60  # climatology barely changes; cache a day
+
+def get_power_climate(lat, lon):
+    """Fetch long-term monthly climate averages (NASA POWER) for this location.
+    Different from live OpenWeather data: this tells us what the climate
+    NORMALLY looks like here, which is what actually determines crop
+    suitability — not today's weather. Returns None on failure so the
+    caller can proceed without it."""
+    if lat is None or lon is None:
+        return None
+
+    cache_key = f"{round(float(lat), 2)}|{round(float(lon), 2)}"
+    now = time.monotonic()
+    cached = _power_cache.get(cache_key)
+    if cached and (now - cached[0]) < POWER_CACHE_TTL_SEC:
+        return cached[1]
+
+    url = (
+        "https://power.larc.nasa.gov/api/temporal/climatology/point"
+        f"?parameters=T2M,PRECTOTCORR,RH2M"
+        f"&community=AG&longitude={lon}&latitude={lat}&format=JSON"
+    )
+    try:
+        resp = requests.get(url, timeout=12)
+        if resp.status_code != 200:
+            print(f"[POWER] HTTP {resp.status_code}")
+            return None
+        data = resp.json()
+        params = data["properties"]["parameter"]
+        month_key = f"{datetime.now().month:02d}"
+
+        climate = {
+            "avg_temp_c":   params.get("T2M", {}).get(month_key),
+            "avg_rain_mm":  params.get("PRECTOTCORR", {}).get(month_key),
+            "avg_humidity": params.get("RH2M", {}).get(month_key),
+            "annual_temp_c":  params.get("T2M", {}).get("ANN"),
+            "annual_rain_mm": params.get("PRECTOTCORR", {}).get("ANN"),
+        }
+        _power_cache[cache_key] = (now, climate)
+        return climate
+    except Exception as e:
+        print(f"[POWER] error: {e}")
+        return None
+# ─── Sowing Safety Check ──────────────────────────────────────────────────
+@app.route("/api/sowing-check")
+def sowing_check():
+    """Looks ahead at the next ~48h forecast (not just today) so a farmer
+    doesn't sow right before heavy rain wastes the work. Uses the same
+    OpenWeather forecast data /api/weather already pulls."""
+    lat = request.args.get("lat")
+    lon = request.args.get("lon")
+    if not lat or not lon:
+        return jsonify({"error": "Location required"}), 400
+
+    forecast_url = (f"https://api.openweathermap.org/data/2.5/forecast"
+                     f"?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units=metric&cnt=16")  # 16*3h = 48h
+    try:
+        resp = requests.get(forecast_url, timeout=10)
+        if resp.status_code != 200:
+            return jsonify({"error": "Forecast unavailable"}), 500
+        items = resp.json().get("list", [])
+
+        HEAVY_RAIN_MM_3H = 8   # single 3h window rain likely to disrupt fresh sowing
+        TOTAL_RAIN_WARN_MM = 20  # cumulative rain over 48h that's risky for seeds/seedlings
+
+        total_rain = 0
+        risky_windows = []
+        for item in items:
+            rain_3h = item.get("rain", {}).get("3h", 0)
+            total_rain += rain_3h
+            if rain_3h >= HEAVY_RAIN_MM_3H:
+                risky_windows.append({
+                    "time": datetime.fromtimestamp(item["dt"]).strftime("%a %I:%M %p"),
+                    "rain_mm": rain_3h,
+                })
+
+        if risky_windows or total_rain >= TOTAL_RAIN_WARN_MM:
+            verdict = "unsafe"
+            message = (f"Heavy rain expected within 48 hours "
+                       f"(~{round(total_rain)}mm total). Sowing now risks seed wash-out.")
+        else:
+            verdict = "safe"
+            message = f"No heavy rain expected in the next 48 hours (~{round(total_rain)}mm total). Conditions look good for sowing."
+
+        return jsonify({
+            "verdict": verdict,
+            "message": message,
+            "total_rain_mm_48h": round(total_rain, 1),
+            "risky_windows": risky_windows,
+        })
+    except Exception as e:
+        print(f"[SowingCheck] error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 # ─── Crop Recommendations ────────────────────────────────────────────────────
 _crop_ai_cache = {}
 CROP_AI_CACHE_TTL_SEC = 3 * 60 * 60  # 3 hours — same city/season/weather bucket repeats a lot in a day
 
 
-def ai_recommend_crops(city, lat, lon, temp, humidity, rain, season):
+def ai_recommend_crops(city, lat, lon, temp, humidity, rain, season,
+                        n=None, p=None, k=None, ph=None, power_climate=None):
     """Ask Groq for crops genuinely suited to THIS location's climate, soil
     region and season — instead of matching generic temp/humidity bands
-    against a fixed 8-crop table (which produced near-identical results for
-    any two places with similar weather, regardless of state/soil/region).
+    against a fixed 8-crop table. Now also considers farmer-entered soil
+    NPK/pH values and NASA POWER long-term climate averages when available.
     Returns None on any failure so the caller can fall back to the
     rule-based recommend_crops() and the dashboard never breaks."""
     if not GROQ_API_KEY:
         return None
 
-    cache_key = f"{city}|{round((lat or 0), 1)}|{round((lon or 0), 1)}|{season}|{round(temp/3)*3}|{round(humidity/10)*10}"
+    soil_bucket = f"{n}|{p}|{k}|{ph}" if any(v is not None for v in (n, p, k, ph)) else "none"
+    power_bucket = f"{round(power_climate['avg_temp_c'],1)}|{round(power_climate['avg_rain_mm'],1)}" if power_climate else "none"
+    cache_key = (f"{city}|{round((lat or 0), 1)}|{round((lon or 0), 1)}|{season}|"
+                 f"{round(temp/3)*3}|{round(humidity/10)*10}|{soil_bucket}|{power_bucket}")
     now = time.monotonic()
     cached = _crop_ai_cache.get(cache_key)
     if cached and (now - cached[0]) < CROP_AI_CACHE_TTL_SEC:
         return cached[1]
+
+    soil_block = ""
+    if any(v is not None for v in (n, p, k, ph)):
+        soil_block = (
+            f"\nFarmer-tested soil values (from Soil Health Card):\n"
+            f"Nitrogen (N): {n if n is not None else 'not provided'}\n"
+            f"Phosphorus (P): {p if p is not None else 'not provided'}\n"
+            f"Potassium (K): {k if k is not None else 'not provided'}\n"
+            f"Soil pH: {ph if ph is not None else 'not provided'}\n"
+            f"Use these actual soil values to refine crop suitability — do not "
+            f"ignore them in favour of generic regional assumptions.\n"
+        )
+
+    climate_block = ""
+    if power_climate and power_climate.get("avg_temp_c") is not None:
+        climate_block = (
+            f"\nLong-term climate normals for this location (NASA POWER, this month):\n"
+            f"Typical avg temperature: {power_climate['avg_temp_c']} deg C\n"
+            f"Typical avg rainfall: {power_climate['avg_rain_mm']} mm/day\n"
+            f"Typical avg humidity: {power_climate['avg_humidity']}%\n"
+            f"Use this as the baseline climate pattern for the region, and treat "
+            f"today's live weather as a short-term variation on top of it.\n"
+        )
 
     prompt = f"""You are an agronomist advising a farmer in India.
 
 Location: {city or "an unspecified Indian town"} (approx. lat {lat}, lon {lon})
 Current season: {season}
 Current weather right now: {temp} deg C, {humidity}% humidity, {rain} mm recent rainfall
-
+{climate_block}{soil_block}
 Recommend the 6 crops BEST suited to THIS exact location's climate, soil
 region and season — not a generic list. Use your knowledge of Indian
 agro-climatic zones (e.g. black cotton soil across much of Maharashtra,
@@ -167,7 +290,9 @@ alluvial soil in the Indo-Gangetic plain, laterite soil along the Western
 Ghats/coastal belts, arid/sandy soil in Rajasthan, red soil in the Deccan
 plateau, etc.) to pick realistic, regionally-appropriate crops that a real
 agricultural officer would suggest for this place right now, ranked by
-suitability.
+suitability. If soil NPK/pH values were provided, factor them in explicitly
+and mention in the description when a crop suits (or doesn't suit) those
+specific soil readings.
 
 Respond ONLY with a JSON object, no preamble, no markdown fences, matching
 exactly this shape:
@@ -217,35 +342,69 @@ exactly this shape:
     except Exception as e:
         print(f"[CropAI] error for {city}: {e}")
         return None
+        
+
+def scale_for_land(crops, land_size, land_unit):
+    """Convert per-hectare figures into actual totals for the farmer's plot.
+    Leaves crop dicts untouched if land_size wasn't provided."""
+    if not land_size:
+        return crops
+    try:
+        size = float(land_size)
+    except (TypeError, ValueError):
+        return crops
+    # normalise to hectares
+    unit = (land_unit or "acre").lower()
+    to_hectare = {"acre": 0.4047, "hectare": 1.0, "bigha": 0.1338}
+    hectares = size * to_hectare.get(unit, 0.4047)
+
+    for c in crops:
+        c["your_land_estimate"] = {
+            "land_size": f"{size} {unit}(s)",
+            "note": f"Figures below are per hectare — for your {size} {unit}(s) "
+                    f"(~{round(hectares, 2)} ha), scale roughly by {round(hectares, 2)}x."
+        }
+    return crops
 
 
 @app.route("/api/crop-recommendations", methods=["POST"])
 def crop_recommendations():
-    data     = request.json or {}
-    temp     = data.get("temp", 25)
-    humidity = data.get("humidity", 60)
-    rain     = data.get("rain", 0)
-    city     = data.get("city", "")
-    lat      = data.get("lat")
-    lon      = data.get("lon")
-    season   = get_season(datetime.now().month)
+    data      = request.json or {}
+    temp      = data.get("temp", 25)
+    humidity  = data.get("humidity", 60)
+    rain      = data.get("rain", 0)
+    city      = data.get("city", "")
+    lat       = data.get("lat")
+    lon       = data.get("lon")
+    n         = data.get("n")
+    p         = data.get("p")
+    k         = data.get("k")
+    ph        = data.get("ph")
+    land_size = data.get("land_size")
+    land_unit = data.get("land_unit", "acre")
+    season    = get_season(datetime.now().month)
 
-    ai_crops = ai_recommend_crops(city, lat, lon, temp, humidity, rain, season)
+    power_climate = get_power_climate(lat, lon) if (lat and lon) else None
+
+    ai_crops = ai_recommend_crops(city, lat, lon, temp, humidity, rain, season,
+                                   n=n, p=p, k=k, ph=ph, power_climate=power_climate)
     if ai_crops:
         crops, source = ai_crops, "ai"
     else:
         crops, source = recommend_crops(temp, humidity, rain, season), "rule_based"
 
+    crops = scale_for_land(crops, land_size, land_unit)
     calendar = generate_advisory_calendar(crops[:3])
     return jsonify({
-        "season":     season,
-        "crops":      crops,
-        "calendar":   calendar,
-        "pesticides": get_pesticide_guide(crops[:3]),
-        "source":     source,   # "ai" = location-aware, "rule_based" = offline fallback
+        "season":         season,
+        "crops":          crops,
+        "calendar":       calendar,
+        "pesticides":     get_pesticide_guide(crops[:3]),
+        "source":         source,        # "ai" = location-aware, "rule_based" = offline fallback
+        "power_climate":  power_climate, # None if unavailable — frontend should handle gracefully
+        "soil_used":      any(v is not None for v in (n, p, k, ph)),
     })
-
-
+    
 def get_season(month):
     if month in [6, 7, 8, 9]:
         return "Kharif (Monsoon)"
