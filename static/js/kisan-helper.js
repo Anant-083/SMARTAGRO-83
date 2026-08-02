@@ -826,6 +826,8 @@ function pickLang(code) {
       const picker = document.getElementById('kisanLangPicker');
       if (picker) picker.style.display = 'none';
       updateSubLabel(chosenLang);
+      addBotMsg(GREETINGS[chosenLang] || GREETINGS.en);
+      renderQuickChips();
     }
 
     const speechLang = VOICE_LANGS[getAppLang()] || 'en-IN';
