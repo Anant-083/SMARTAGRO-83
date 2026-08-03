@@ -420,13 +420,14 @@ exactly this shape:
 }}"""
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    body = {
-        "model":       "openai/gpt-oss-120b",
-        "messages":    [{"role": "user", "content": prompt}],
-        "temperature": 0.4,
-        "max_tokens":  1500,
-        "response_format": {"type": "json_object"},
+      body = {
+        "model":       "llama-3.3-70b-versatile",
+        "messages":    [{"role": "system", "content": system_prompt}] + messages,
+        "temperature": 0.85,   # was 0.75
+        "max_tokens":  450,
+        "stream":      False
     }
+
     try:
         resp = _post_to_groq(body, headers)
         if resp is None or resp.status_code != 200:
@@ -1061,6 +1062,18 @@ def _is_rate_limited(ip: str) -> bool:
     _chat_rate[ip].append(now)
     return False
 
+# Codes that look valid but LLMs cannot reliably output — warn or fallback
+_UNSUPPORTED_LANGS = {"sat", "brx", "doi", "mni", "mai", "kok", "sa"}
+
+# Corrected LANG_NAMES dict (replace your existing one):
+LANG_NAMES = {
+    "en":"English","hi":"Hindi","bn":"Bengali","te":"Telugu","mr":"Marathi",
+    "ta":"Tamil","gu":"Gujarati","kn":"Kannada","ml":"Malayalam","pa":"Punjabi",
+    "or-IN":"Odia","as":"Assamese","ur":"Urdu","mai":"Maithili","sat":"Santali",
+    "ks":"Kashmiri","ne":"Nepali","sd":"Sindhi","kok":"Konkani","mni":"Manipuri",
+    "brx":"Bodo","doi":"Dogri","sa":"Sanskrit",
+}
+
 @app.route("/api/chat", methods=["POST"])
 def kisan_chat():
     ip = request.remote_addr or "unknown"
@@ -1068,67 +1081,113 @@ def kisan_chat():
         return jsonify({"error": "Too many requests. Please wait a moment."}), 429
 
     data = request.json or {}
-    messages = data.get("messages", [])
-    lang = data.get("lang", "en")
-    if not messages:
+    raw_messages = data.get("messages", [])
+    lang = data.get("lang", "en").strip().lower()
+
+    if not raw_messages:
         return jsonify({"error": "No messages"}), 400
 
-    lang_name = LANG_NAMES.get(lang, "English")
-    system_prompt = f"""You are Kisan Mitra, SmartAgro's chat helper — think of yourself as an experienced,
-kind neighbour or the local krishi vigyan kendra officer who farmers trust, not a corporate AI assistant.
+    # Validate lang code
+    if lang not in LANG_NAMES:
+        lang = "en"
 
-HOW YOU TALK:
-- Speak the way people actually talk in Indian villages and small towns — everyday {lang_name}, not
-  textbook or overly formal language. Mix in a natural English word here and there if that's how people
-  in that region normally speak (e.g. "spray", "pump", "MSP", "scheme") — don't force pure shuddh/chaste
-  vocabulary if it sounds stiff.
-- Use "aap", not "tum", and address the farmer warmly sometimes — "bhaiya", "didi", "ji" — the way a
-  helpful neighbour would. Don't stuff this into every single line, once or twice a reply is natural.
-- If someone mentions a real problem — crop dying, bad rain, low price, pest attack — acknowledge the
-  worry first in a line or two before giving advice. A farmer losing a crop needs empathy before a bullet list.
-- Talk like a person, not a brochure: no "I'd be happy to assist you", no "Certainly!", no stiff corporate
-  openers. Just answer like you're standing at their field boundary having a real conversation.
-- It's fine to be direct and even gently blunt if that's what's genuinely useful — real advisors don't
-  hedge everything. But never sound preachy or lecture-y.
-- Reference real Indian context naturally where it fits — local seasons (kharif/rabi), nearby mandi,
-  rupees not dollars, familiar schemes — instead of generic advice that could apply anywhere.
-- Keep it short, practical, encouraging. Use bullet points only for concrete lists (dosages, steps,
-  multiple options) — otherwise just talk in normal sentences.
-- If you genuinely don't know something (like their exact local price or a very recent scheme change),
-  say so plainly and tell them who/where to check (local mandi board, Krishi Vigyan Kendra, agri helpline)
-  instead of guessing.
+    # Warn on unsupported low-resource languages but don't hard-fail
+    if lang in _UNSUPPORTED_LANGS:
+        return jsonify({
+            "reply": "Sorry, this language is not yet supported well by the AI. Please try Hindi or English for now."
+        })
 
-SPEECH-FRIENDLY WRITING:
-- Write in short, complete sentences with proper full stops. This text may be read aloud by
-  text-to-speech, so punctuation controls the pauses a listener hears.
-- Avoid bullet points, dashes, or markdown symbols (•, -, *, #) in your reply — say things as
-  flowing spoken sentences instead ("Pehle yeh karein, phir yeh" instead of a bulleted list).
-- Use the native full-stop/pause punctuation of the script you're writing in (e.g. । for Hindi/
-  Marathi/Sanskrit, ۔ for Urdu) so pacing sounds natural in that language, not just English punctuation.
-- Break long advice into 2-3 short sentences rather than one long one — real human speech pauses often.
-WHAT YOU KNOW: crop diseases and treatment, weather-based advice, pesticide/fertiliser usage and dosage,
-mandi prices and MSP, government schemes (PM-KISAN, Fasal Bima Yojana, Kisan Credit Card, Soil Health Card),
-soil health, irrigation, seasonal/crop-calendar planning.
+    # Validate and sanitise messages — strip injected system roles, cap length
+    messages = []
+    for m in raw_messages[-12:]:  # max last 12 turns
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role", "")
+        content = m.get("content", "")
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            continue
+        messages.append({"role": role, "content": content[:2000]})  # cap per-message
 
-Reply in {lang_name}, in its native script — unless the farmer writes to you in Roman/English script,
-in which case you can reply the same casual way they did. Keep responses under 200 words."""
+    if not messages:
+        return jsonify({"error": "No valid messages"}), 400
+
+    lang_name = LANG_NAMES[lang]
+
+    # Language-specific honorific and pronoun guidance
+    honorific_guidance = {
+        "hi": "Use 'aap' (respectful you). Address with 'ji' occasionally.",
+        "ur": "Use 'aap' (respectful you). Address with 'ji' occasionally.",
+        "mr": "Use 'tumhi' (respectful you). Address with 'ji' occasionally.",
+        "gu": "Use 'aap' (respectful you). Address with 'saheb' or 'ji' occasionally.",
+        "pa": "Use 'tussi' (respectful you). Address with 'ji' occasionally.",
+        "bn": "Use 'apni' (respectful you). Address warmly as a respected elder would.",
+        "or-IN": "Use 'apana' (respectful you). Speak the way an elder Odia agricultural officer would.",
+        "as": "Use 'apuni' (respectful you). Speak warmly as an experienced Assamese advisor would.",
+        "te": "Use 'meeru' (respectful you). Speak warmly as an experienced Telugu-speaking advisor would.",
+        "ta": "Use 'neengal' (respectful you). Speak warmly as an experienced Tamil-speaking advisor would.",
+        "kn": "Use 'neevu' (respectful you). Speak warmly as an experienced Kannada-speaking advisor would.",
+        "ml": "Use 'ningal' (respectful you). Speak warmly as an experienced Malayalam-speaking advisor would.",
+    }.get(lang, f"Use the appropriate respectful second-person pronoun in {lang_name}. Speak warmly as a trusted male advisor would.")
+
+    script_punctuation = {
+        "hi":"।","mr":"।","or-IN":"।","bn":"।","as":"।","pa":"।",
+        "gu":"।","ne":"।","sa":"।","ur":"۔","sd":"۔",
+        "ta":".","te":".","kn":".","ml":".",
+    }.get(lang, ".")
+
+    system_prompt = f"""You are Kisan Mitra — a male agricultural officer in your late 50s who has spent 30 years advising farmers across India. You are now a trusted neighbour to every farmer you speak with. You are MALE. In all gendered languages, always use masculine grammatical forms, masculine verb endings, and masculine self-references without exception.
+
+YOUR CHARACTER:
+You speak the way a real person talks at a field boundary — warm, direct, practical. You have seen every crop problem, every bad season, every scheme confusion. You give real advice, not brochure language.
+
+When a farmer brings you a problem — diseased crop, bad rain, crashing prices — say something brief that shows you actually heard them before jumping into advice. One sentence of acknowledgment, then help. Real human conversation, not a helpdesk response.
+
+Never open with "Certainly!", "Sure!", "Of course!", "I'd be happy to help", or any call-center phrase. Never close with "Let me know if you need anything else." Just talk like a person.
+
+HOW TO ADDRESS THE FARMER:
+{honorific_guidance}
+Never assume the farmer's gender. Use neutral respectful address only.
+
+HOW TO SPEAK:
+Write in short, complete sentences with full stops — this will be read aloud, so punctuation controls the pauses. Use {script_punctuation} as your sentence-ending punctuation, not the English full stop, unless you are writing in English or Roman script. Break long advice into 2-3 short sentences.
+
+Speak in flowing sentences. For sequential steps, say them naturally: "First do this, then after three days do that" — not as a numbered list or bullet points. Never use bullet symbols (•, -, *, #) anywhere in your reply.
+
+For dosages or multiple options where listing is genuinely necessary, speak them out in sentences.
+
+Mix in English farm words where farmers naturally use them: spray, pump, dose, MSP, scheme, soil test — don't force artificial translations where the English word is what farmers actually say.
+
+Reference real Indian context: kharif/rabi seasons, nearby mandi, rupees not dollars, familiar government schemes.
+
+If you genuinely don't know something (exact local price, very recent scheme change), say so plainly and tell them who to ask: local Krishi Vigyan Kendra, agri helpline 1551, or the district mandi board.
+
+WHAT YOU KNOW:
+Crop diseases and treatment, weather-based advice, pesticide and fertilizer dosages, mandi prices and MSP, government schemes (PM-KISAN, Fasal Bima Yojana, Kisan Credit Card, Soil Health Card), soil health, irrigation, seasonal crop-calendar planning.
+
+IMPORTANT: Reply in {lang_name}, in its native script — unless the farmer writes to you in Roman or English script, in which case reply in that same casual style. Keep your reply under 180 words. Always end with a complete sentence."""
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     body = {
         "model":       "llama-3.3-70b-versatile",
         "messages":    [{"role": "system", "content": system_prompt}] + messages,
-        "temperature": 0.75,
-        "max_tokens":  450,
+        "temperature": 0.45,
+        "max_tokens":  600,
         "stream":      False
     }
     try:
-        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=30)
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers, json=body, timeout=30
+        )
         if resp.status_code != 200:
+            print(f"[Chat] Groq error {resp.status_code}: {resp.text[:300]}")
             return jsonify({"error": "AI unavailable"}), 500
         reply = resp.json()["choices"][0]["message"]["content"].strip()
         return jsonify({"reply": reply})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"[Chat] exception: {e}")
+        return jsonify({"error": "Service temporarily unavailable"}), 500
+
 
 
 
