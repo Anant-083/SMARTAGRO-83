@@ -27,25 +27,28 @@ app = Flask(__name__)
 
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 GROQ_API_KEY        = os.getenv("GROQ_API_KEY", "")
-NINJA_API_KEY       = os.getenv("NINJA_API_KEY", "")  # no longer used by /api/market (kept for backward-compat only)
-KINDWISE_API_KEY     = os.getenv("KINDWISE_API_KEY", "")   # ← add this line
+NINJA_API_KEY       = os.getenv("NINJA_API_KEY", "")
+KINDWISE_API_KEY    = os.getenv("KINDWISE_API_KEY", "")
 DEBUG_MODE          = os.getenv("FLASK_DEBUG", "0") == "1"
 
 _translation_cache = {}
 
+# ─── Single canonical LANG_NAMES (do NOT redeclare later) ──────────────────
 LANG_NAMES = {
     "en":"English","hi":"Hindi","bn":"Bengali","te":"Telugu","mr":"Marathi",
     "ta":"Tamil","gu":"Gujarati","kn":"Kannada","ml":"Malayalam","pa":"Punjabi",
-    "or":"Odia","as":"Assamese","ur":"Urdu","mai":"Maithili","sat":"Santali",
+    "or-IN":"Odia","as":"Assamese","ur":"Urdu","mai":"Maithili","sat":"Santali",
     "ks":"Kashmiri","ne":"Nepali","sd":"Sindhi","kok":"Konkani","mni":"Manipuri",
-    "bodo":"Bodo","doi":"Dogri","sa":"Sanskrit",
+    "brx":"Bodo","doi":"Dogri","sa":"Sanskrit",
 }
+_UNSUPPORTED_LANGS = {"sat", "brx", "doi", "mni", "mai", "kok", "sa"}
 
 print(f"[AgroSmart] Groq key:    {'OK (' + GROQ_API_KEY[:8] + '...)' if GROQ_API_KEY else 'MISSING'}")
 print(f"[AgroSmart] Weather key: {'OK' if OPENWEATHER_API_KEY else 'MISSING'}")
 print(f"[AgroSmart] Ninja key:   {'OK (' + NINJA_API_KEY[:8] + '...)' if NINJA_API_KEY else 'MISSING'}")
 
-# ─── Routes ──────────────────────────────────────────────────────────────────
+
+# ─── Pages ──────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -66,6 +69,11 @@ def alerts():
 def offline():
     return render_template('offline.html')
 
+@app.route("/farm-map")
+def farm_map():
+    return render_template("farm_map.html")
+
+
 # ─── Weather API ─────────────────────────────────────────────────────────────
 @app.route("/api/weather")
 def get_weather():
@@ -82,10 +90,8 @@ def get_weather():
     try:
         current_resp  = requests.get(current_url,  timeout=10)
         forecast_resp = requests.get(forecast_url, timeout=10)
-
         if current_resp.status_code != 200:
             return jsonify({"error": f"Weather API error: {current_resp.text}"}), 500
-
         current_data  = current_resp.json()
         forecast_data = forecast_resp.json()
 
@@ -134,30 +140,21 @@ def get_weather():
         return jsonify({"error": str(e)}), 500
 
 
-# ─── NASA POWER Climate Data (long-term climatology, no API key needed) ─────
+# ─── NASA POWER Climate ─────────────────────────────────────────────────────
 _power_cache = {}
-POWER_CACHE_TTL_SEC = 24 * 60 * 60  # climatology barely changes; cache a day
+POWER_CACHE_TTL_SEC = 24 * 60 * 60
 
 def get_power_climate(lat, lon):
-    """Fetch long-term monthly climate averages (NASA POWER) for this location.
-    Different from live OpenWeather data: this tells us what the climate
-    NORMALLY looks like here, which is what actually determines crop
-    suitability — not today's weather. Returns None on failure so the
-    caller can proceed without it."""
     if lat is None or lon is None:
         return None
-
     cache_key = f"{round(float(lat), 2)}|{round(float(lon), 2)}"
     now = time.monotonic()
     cached = _power_cache.get(cache_key)
     if cached and (now - cached[0]) < POWER_CACHE_TTL_SEC:
         return cached[1]
 
-    url = (
-        "https://power.larc.nasa.gov/api/temporal/climatology/point"
-        f"?parameters=T2M,PRECTOTCORR,RH2M"
-        f"&community=AG&longitude={lon}&latitude={lat}&format=JSON"
-    )
+    url = ("https://power.larc.nasa.gov/api/temporal/climatology/point"
+           f"?parameters=T2M,PRECTOTCORR,RH2M&community=AG&longitude={lon}&latitude={lat}&format=JSON")
     try:
         resp = requests.get(url, timeout=12)
         if resp.status_code != 200:
@@ -166,13 +163,12 @@ def get_power_climate(lat, lon):
         data = resp.json()
         params = data["properties"]["parameter"]
         month_key = f"{datetime.now().month:02d}"
-
         climate = {
-            "avg_temp_c":   params.get("T2M", {}).get(month_key),
-            "avg_rain_mm":  params.get("PRECTOTCORR", {}).get(month_key),
-            "avg_humidity": params.get("RH2M", {}).get(month_key),
-            "annual_temp_c":  params.get("T2M", {}).get("ANN"),
-            "annual_rain_mm": params.get("PRECTOTCORR", {}).get("ANN"),
+            "avg_temp_c":    params.get("T2M", {}).get(month_key),
+            "avg_rain_mm":   params.get("PRECTOTCORR", {}).get(month_key),
+            "avg_humidity":  params.get("RH2M", {}).get(month_key),
+            "annual_temp_c": params.get("T2M", {}).get("ANN"),
+            "annual_rain_mm":params.get("PRECTOTCORR", {}).get("ANN"),
         }
         _power_cache[cache_key] = (now, climate)
         return climate
@@ -181,21 +177,13 @@ def get_power_climate(lat, lon):
         return None
 
 
-# ─── Vegetation Health (NASA MODIS NDVI via ORNL DAAC, no API key needed) ──
-# This uses point-based NDVI values (a single number describing how green/
-# healthy vegetation is at this spot), NOT raw satellite image processing —
-# genuinely lightweight enough to run on a free-tier server, unlike full
-# NDVI-from-imagery pipelines which need real remote-sensing compute.
+# ─── NASA MODIS NDVI ────────────────────────────────────────────────────────
 _ndvi_cache = {}
 NDVI_CACHE_TTL_SEC = 12 * 60 * 60
 
 def get_vegetation_index(lat, lon):
-    """Fetch the most recent MODIS NDVI (vegetation health) reading for this
-    point from ORNL DAAC's public MODIS subset service. Returns None on any
-    failure — this is a nice-to-have overlay, never a blocker."""
     if lat is None or lon is None:
         return None
-
     cache_key = f"{round(float(lat), 2)}|{round(float(lon), 2)}"
     now = time.monotonic()
     cached = _ndvi_cache.get(cache_key)
@@ -204,7 +192,6 @@ def get_vegetation_index(lat, lon):
 
     base = "https://modis.ornl.gov/rst/api/v1/MOD13Q1"
     try:
-        # Step 1: find the most recent available date for this point
         dates_resp = requests.get(f"{base}/dates", params={"latitude": lat, "longitude": lon}, timeout=10)
         if dates_resp.status_code != 200:
             return None
@@ -213,15 +200,12 @@ def get_vegetation_index(lat, lon):
             return None
         latest = dates[-1]["modis_date"]
 
-        # Step 2: fetch the actual NDVI value for that date
         subset_resp = requests.get(
             f"{base}/subset",
-            params={
-                "latitude": lat, "longitude": lon,
-                "startDate": latest, "endDate": latest,
-                "kmAboveBelow": 0, "kmLeftRight": 0,
-                "band": "250m_16_days_NDVI",
-            },
+            params={"latitude": lat, "longitude": lon,
+                    "startDate": latest, "endDate": latest,
+                    "kmAboveBelow": 0, "kmLeftRight": 0,
+                    "band": "250m_16_days_NDVI"},
             timeout=10,
         )
         if subset_resp.status_code != 200:
@@ -231,22 +215,17 @@ def get_vegetation_index(lat, lon):
             return None
 
         raw_val = subset[0]["data"][0]
-        if raw_val in (None, -3000):  # MODIS fill/no-data value
+        if raw_val in (None, -3000):
             return None
-        ndvi = round(raw_val * 0.0001, 3)  # MODIS NDVI scale factor
+        ndvi = round(raw_val * 0.0001, 3)
 
-        if ndvi < 0.2:
-            health = "Bare soil / no vegetation"
-        elif ndvi < 0.4:
-            health = "Sparse vegetation"
-        elif ndvi < 0.6:
-            health = "Moderate vegetation"
-        else:
-            health = "Dense, healthy vegetation"
+        if ndvi < 0.2:   health = "Bare soil / no vegetation"
+        elif ndvi < 0.4: health = "Sparse vegetation"
+        elif ndvi < 0.6: health = "Moderate vegetation"
+        else:            health = "Dense, healthy vegetation"
 
         result = {
-            "ndvi": ndvi,
-            "health_label": health,
+            "ndvi": ndvi, "health_label": health,
             "date": subset[0].get("calendar_date"),
             "note": "Reflects whatever is currently growing on this land (or bare soil) — "
                     "not a prediction of future crop health.",
@@ -258,52 +237,36 @@ def get_vegetation_index(lat, lon):
         return None
 
 
-@app.route("/farm-map")
-def farm_map():
-    return render_template("farm_map.html")
-
-
 @app.route("/api/area-details")
 def area_details():
-    """Combined endpoint for the Farm Map page: climate normals + vegetation
-    health for a given point. Crop recommendations still go through the
-    existing /api/crop-recommendations endpoint (reused as-is)."""
     lat = request.args.get("lat")
     lon = request.args.get("lon")
     if not lat or not lon:
         return jsonify({"error": "Location required"}), 400
-
-    power_climate = get_power_climate(lat, lon)
-    vegetation = get_vegetation_index(lat, lon)
-
     return jsonify({
-        "power_climate": power_climate,
-        "vegetation": vegetation,
+        "power_climate": get_power_climate(lat, lon),
+        "vegetation":    get_vegetation_index(lat, lon),
     })
 
 
-# ─── Sowing Safety Check ──────────────────────────────────────────────────
+# ─── Sowing Safety Check ────────────────────────────────────────────────────
 @app.route("/api/sowing-check")
 def sowing_check():
-    """Looks ahead at the next ~48h forecast (not just today) so a farmer
-    doesn't sow right before heavy rain wastes the work. Uses the same
-    OpenWeather forecast data /api/weather already pulls."""
     lat = request.args.get("lat")
     lon = request.args.get("lon")
     if not lat or not lon:
         return jsonify({"error": "Location required"}), 400
 
     forecast_url = (f"https://api.openweathermap.org/data/2.5/forecast"
-                     f"?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units=metric&cnt=16")  # 16*3h = 48h
+                    f"?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units=metric&cnt=16")
     try:
         resp = requests.get(forecast_url, timeout=10)
         if resp.status_code != 200:
             return jsonify({"error": "Forecast unavailable"}), 500
         items = resp.json().get("list", [])
 
-        HEAVY_RAIN_MM_3H = 8   # single 3h window rain likely to disrupt fresh sowing
-        TOTAL_RAIN_WARN_MM = 20  # cumulative rain over 48h that's risky for seeds/seedlings
-
+        HEAVY_RAIN_MM_3H = 8
+        TOTAL_RAIN_WARN_MM = 20
         total_rain = 0
         risky_windows = []
         for item in items:
@@ -324,8 +287,7 @@ def sowing_check():
             message = f"No heavy rain expected in the next 48 hours (~{round(total_rain)}mm total). Conditions look good for sowing."
 
         return jsonify({
-            "verdict": verdict,
-            "message": message,
+            "verdict": verdict, "message": message,
             "total_rain_mm_48h": round(total_rain, 1),
             "risky_windows": risky_windows,
         })
@@ -334,11 +296,45 @@ def sowing_check():
         return jsonify({"error": str(e)}), 500
 
 
-# ─── Crop Recommendations ────────────────────────────────────────────────────
+# ─── Groq helper (defined early so any function below can use it) ──────────
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+MIN_CALL_INTERVAL_SEC = 0.2
+_model_last_call = {}
+_model_throttle_lock = threading.Lock()
+
+def _throttle_model(model):
+    with _model_throttle_lock:
+        now = time.monotonic()
+        next_slot = max(now, _model_last_call.get(model, 0) + MIN_CALL_INTERVAL_SEC)
+        _model_last_call[model] = next_slot
+        wait = next_slot - now
+    if wait > 0:
+        time.sleep(wait)
+
+def _post_to_groq(body, headers, max_retries=2):
+    model = body.get("model")
+    resp = None
+    for attempt in range(max_retries + 1):
+        _throttle_model(model)
+        resp = requests.post(GROQ_CHAT_URL, headers=headers, json=body, timeout=45)
+        if resp.status_code != 429:
+            return resp
+        retry_after = resp.headers.get("Retry-After")
+        try:
+            wait = float(retry_after) if retry_after else (1.5 * (attempt + 1))
+        except (TypeError, ValueError):
+            wait = 1.5 * (attempt + 1)
+        if attempt < max_retries:
+            time.sleep(min(wait, 6))
+    return resp
+
+
+# ─── Crop Recommendations ───────────────────────────────────────────────────
 _crop_ai_cache = {}
-CROP_AI_CACHE_TTL_SEC = 3 * 60 * 60  # 3 hours — same city/season/weather bucket repeats a lot in a day
+CROP_AI_CACHE_TTL_SEC = 3 * 60 * 60
+
 def ai_recommend_crops(city, lat, lon, temp, humidity, rain, season,
-                        n=None, p=None, k=None, ph=None, power_climate=None):
+                       n=None, p=None, k=None, ph=None, power_climate=None):
     if not GROQ_API_KEY:
         return None
 
@@ -368,25 +364,22 @@ def ai_recommend_crops(city, lat, lon, temp, humidity, rain, season,
     climate_block = ""
     if power_climate and power_climate.get("avg_temp_c") is not None:
         climate_block = (
-            f"\nLong-term climate normals for this location (NASA POWER, this month):\n"
+            f"\nLong-term climate normals (NASA POWER, this month):\n"
             f"Typical avg temperature: {power_climate['avg_temp_c']} deg C\n"
             f"Typical avg rainfall: {power_climate['avg_rain_mm']} mm/day\n"
             f"Typical avg humidity: {power_climate['avg_humidity']}%\n"
         )
 
-    # NOTE: JSON template braces are doubled ({{ }}) because this is an f-string
     prompt = f"""You are an agronomist advising a farmer in India.
 
 Location: {city or "an unspecified Indian town"} (approx. lat {lat}, lon {lon})
 Current season: {season}
-Current weather right now: {temp} deg C, {humidity}% humidity, {rain} mm recent rainfall
+Current weather: {temp} deg C, {humidity}% humidity, {rain} mm recent rainfall
 {climate_block}{soil_block}
-Recommend the 6 crops BEST suited to THIS exact location's climate, soil region and season.
-Use Indian agro-climatic zone knowledge (black cotton soil in Maharashtra, alluvial in the
-Indo-Gangetic plain, laterite along the Western Ghats, arid/sandy in Rajasthan, red soil in
-the Deccan, etc.). If soil NPK/pH values are given, factor them in explicitly.
+Recommend the 6 crops BEST suited to THIS location's climate, soil region and season.
+Use Indian agro-climatic zone knowledge. If soil NPK/pH values are given, factor them in.
 
-Respond ONLY with a JSON object, no preamble, no markdown fences, matching this shape:
+Respond ONLY with a JSON object, no preamble, no markdown fences:
 {{
   "crops": [
     {{
@@ -440,8 +433,6 @@ Respond ONLY with a JSON object, no preamble, no markdown fences, matching this 
 
 
 def scale_for_land(crops, land_size, land_unit):
-    """Convert per-hectare figures into actual totals for the farmer's plot.
-    Leaves crop dicts untouched if land_size wasn't provided."""
     if not land_size:
         return crops
     try:
@@ -451,7 +442,6 @@ def scale_for_land(crops, land_size, land_unit):
     unit = (land_unit or "acre").lower()
     to_hectare = {"acre": 0.4047, "hectare": 1.0, "bigha": 0.1338}
     hectares = size * to_hectare.get(unit, 0.4047)
-
     for c in crops:
         c["your_land_estimate"] = {
             "land_size": f"{size} {unit}(s)",
@@ -470,43 +460,35 @@ def crop_recommendations():
     city      = data.get("city", "")
     lat       = data.get("lat")
     lon       = data.get("lon")
-    n         = data.get("n")
-    p         = data.get("p")
-    k         = data.get("k")
-    ph        = data.get("ph")
+    n         = data.get("n"); p = data.get("p"); k = data.get("k"); ph = data.get("ph")
     land_size = data.get("land_size")
     land_unit = data.get("land_unit", "acre")
     season    = get_season(datetime.now().month)
 
     power_climate = get_power_climate(lat, lon) if (lat and lon) else None
-
     ai_crops = ai_recommend_crops(city, lat, lon, temp, humidity, rain, season,
-                                   n=n, p=p, k=k, ph=ph, power_climate=power_climate)
+                                  n=n, p=p, k=k, ph=ph, power_climate=power_climate)
     if ai_crops:
         crops, source = ai_crops, "ai"
     else:
         crops, source = recommend_crops(temp, humidity, rain, season), "rule_based"
 
     crops = scale_for_land(crops, land_size, land_unit)
-    calendar = generate_advisory_calendar(crops[:3])
     return jsonify({
-        "season":         season,
-        "crops":          crops,
-        "calendar":       calendar,
-        "pesticides":     get_pesticide_guide(crops[:3]),
-        "source":         source,        # "ai" = location-aware, "rule_based" = offline fallback
-        "power_climate":  power_climate, # None if unavailable — frontend should handle gracefully
-        "soil_used":      any(v is not None for v in (n, p, k, ph)),
+        "season":        season,
+        "crops":         crops,
+        "calendar":      generate_advisory_calendar(crops[:3]),
+        "pesticides":    get_pesticide_guide(crops[:3]),
+        "source":        source,
+        "power_climate": power_climate,
+        "soil_used":     any(v is not None for v in (n, p, k, ph)),
     })
 
 
 def get_season(month):
-    if month in [6, 7, 8, 9]:
-        return "Kharif (Monsoon)"
-    elif month in [10, 11, 12, 1, 2]:
-        return "Rabi (Winter)"
-    else:
-        return "Zaid (Summer)"
+    if month in [6, 7, 8, 9]:            return "Kharif (Monsoon)"
+    elif month in [10, 11, 12, 1, 2]:    return "Rabi (Winter)"
+    else:                                return "Zaid (Summer)"
 
 
 def recommend_crops(temp, humidity, rain, season):
@@ -579,168 +561,100 @@ def get_pesticide_guide(crops):
     return result
 
 
-# ─── Market Data — Agmarknet (Govt. of India, official) ──────────────────────
-# Data source: "Current Daily Price of Various Commodities from Various
-# Markets (Mandi)" — published by the Directorate of Marketing & Inspection,
-# Ministry of Agriculture & Farmers Welfare, via data.gov.in (open data,
-# Govt. of India). This is the SAME data Agmarknet.gov.in itself is built on
-# — it is the authoritative, official source for Indian mandi prices, unlike
-# global commodity-futures APIs (which price Chicago wheat/corn, not Indian
-# mandi produce) or hand-typed reference tables.
-#
-# Get a free personal key at https://data.gov.in (Sign Up -> My Account ->
-# API keys) and set it as DATA_GOV_API_KEY in your .env. Until you do, this
-# falls back to data.gov.in's shared public test key, which is rate-limited
-# and NOT meant for production — replace it as soon as you can.
+# ─── Market Data (Agmarknet) ────────────────────────────────────────────────
 DATA_GOV_API_KEY = os.getenv("DATA_GOV_API_KEY", "")
 if not DATA_GOV_API_KEY:
     print("[AgroSmart] WARNING: DATA_GOV_API_KEY not set — /api/market will use MSP reference prices only")
 AGMARKNET_RESOURCE_ID = "9ef84268-d588-465a-a308-a864a43d0070"
 AGMARKNET_URL = f"https://api.data.gov.in/resource/{AGMARKNET_RESOURCE_ID}"
 
-# Reusable session with automatic retries — helps ride out brief network
-# hiccups instead of failing on the first slow attempt.
 _agmark_session = requests.Session()
-_agmark_retry = requests.adapters.Retry(
-    total=1, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]
-)
+_agmark_retry = requests.adapters.Retry(total=1, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
 _agmark_session.mount("https://", requests.adapters.HTTPAdapter(max_retries=_agmark_retry))
 
-# Agmarknet's commodity names vs. the display names SmartAgro already uses
-# in the UI/translations. Extend this as you add more crops.
 AGMARK_COMMODITY_ALIASES = {
-    "wheat": "Wheat", "rice": "Rice", "maize": "Maize (Corn)",
-    "mustard": "Mustard", "groundnut": "Groundnut", "onion": "Onion",
-    "potato": "Potato", "tomato": "Tomato", "green chilli": "Chilli",
-    "chilli": "Chilli", "sugarcane": "Sugarcane",
-    "arhar (tur/red gram)(whole)": "Arhar (Tur)", "arhar": "Arhar (Tur)",
-    "green gram (moong)(whole)": "Moong", "moong": "Moong",
-    "black gram (urad beans)(whole)": "Urad", "urad": "Urad",
-    "soyabean": "Soybean", "soybean": "Soybean", "cotton": "Cotton",
-    "jowar(sorghum)": "Jowar (Sorghum)",
-    "bajra(pearl millet/cumbu)": "Bajra (Pearl Millet)",
-    "bengal gram(gram)(whole)": "Bengal Gram (Chana)",
-    "garlic": "Garlic", "ginger(green)": "Ginger", "ginger": "Ginger",
-    "turmeric": "Turmeric", "cumin(jeera)": "Cumin (Jeera)",
-    "coriander(leaves)": "Coriander", "coriander": "Coriander",
-    "banana": "Banana", "mango": "Mango",
+    "wheat":"Wheat","rice":"Rice","maize":"Maize (Corn)","mustard":"Mustard",
+    "groundnut":"Groundnut","onion":"Onion","potato":"Potato","tomato":"Tomato",
+    "green chilli":"Chilli","chilli":"Chilli","sugarcane":"Sugarcane",
+    "arhar (tur/red gram)(whole)":"Arhar (Tur)","arhar":"Arhar (Tur)",
+    "green gram (moong)(whole)":"Moong","moong":"Moong",
+    "black gram (urad beans)(whole)":"Urad","urad":"Urad",
+    "soyabean":"Soybean","soybean":"Soybean","cotton":"Cotton",
+    "jowar(sorghum)":"Jowar (Sorghum)","bajra(pearl millet/cumbu)":"Bajra (Pearl Millet)",
+    "bengal gram(gram)(whole)":"Bengal Gram (Chana)","garlic":"Garlic",
+    "ginger(green)":"Ginger","ginger":"Ginger","turmeric":"Turmeric",
+    "cumin(jeera)":"Cumin (Jeera)","coriander(leaves)":"Coriander","coriander":"Coriander",
+    "banana":"Banana","mango":"Mango",
 }
 
-# ── Hardcoded fallback (MSP / reference) commodities ─────────────────────────
-# Used whenever the live Agmarknet feed returns nothing for a state (rate
-# limited test key, holiday with no reporting, network hiccup, etc). This is
-# intentionally a broad basket so the dashboard, comparison table and every
-# chart type still have enough data to look complete and real — not just a
-# couple of rows.
 MSP_FALLBACK = [
-    {"crop": "Wheat",                "price": 2275,  "unit": "Rs/quintal"},
-    {"crop": "Rice",                 "price": 2183,  "unit": "Rs/quintal"},
-    {"crop": "Maize (Corn)",         "price": 2090,  "unit": "Rs/quintal"},
-    {"crop": "Mustard",              "price": 5650,  "unit": "Rs/quintal"},
-    {"crop": "Groundnut",            "price": 6377,  "unit": "Rs/quintal"},
-    {"crop": "Onion",                "price": 1800,  "unit": "Rs/quintal"},
-    {"crop": "Potato",               "price": 1200,  "unit": "Rs/quintal"},
-    {"crop": "Tomato",               "price": 2500,  "unit": "Rs/quintal"},
-    {"crop": "Chilli",               "price": 12000, "unit": "Rs/quintal"},
-    {"crop": "Sugarcane",            "price": 340,   "unit": "Rs/quintal"},
-    {"crop": "Arhar (Tur)",          "price": 7000,  "unit": "Rs/quintal"},
-    {"crop": "Moong",                "price": 8558,  "unit": "Rs/quintal"},
-    {"crop": "Urad",                 "price": 6950,  "unit": "Rs/quintal"},
-    {"crop": "Soybean",              "price": 4600,  "unit": "Rs/quintal"},
-    {"crop": "Cotton",               "price": 7121,  "unit": "Rs/quintal"},
-    {"crop": "Jowar (Sorghum)",      "price": 3180,  "unit": "Rs/quintal"},
-    {"crop": "Bajra (Pearl Millet)", "price": 2500,  "unit": "Rs/quintal"},
-    {"crop": "Bengal Gram (Chana)",  "price": 5440,  "unit": "Rs/quintal"},
-    {"crop": "Garlic",               "price": 8000,  "unit": "Rs/quintal"},
-    {"crop": "Ginger",               "price": 6000,  "unit": "Rs/quintal"},
-    {"crop": "Turmeric",             "price": 14000, "unit": "Rs/quintal"},
-    {"crop": "Cumin (Jeera)",        "price": 25000, "unit": "Rs/quintal"},
-    {"crop": "Coriander",            "price": 7000,  "unit": "Rs/quintal"},
-    {"crop": "Banana",               "price": 1500,  "unit": "Rs/quintal"},
-    {"crop": "Mango",                "price": 4000,  "unit": "Rs/quintal"},
+    {"crop":"Wheat","price":2275,"unit":"Rs/quintal"},
+    {"crop":"Rice","price":2183,"unit":"Rs/quintal"},
+    {"crop":"Maize (Corn)","price":2090,"unit":"Rs/quintal"},
+    {"crop":"Mustard","price":5650,"unit":"Rs/quintal"},
+    {"crop":"Groundnut","price":6377,"unit":"Rs/quintal"},
+    {"crop":"Onion","price":1800,"unit":"Rs/quintal"},
+    {"crop":"Potato","price":1200,"unit":"Rs/quintal"},
+    {"crop":"Tomato","price":2500,"unit":"Rs/quintal"},
+    {"crop":"Chilli","price":12000,"unit":"Rs/quintal"},
+    {"crop":"Sugarcane","price":340,"unit":"Rs/quintal"},
+    {"crop":"Arhar (Tur)","price":7000,"unit":"Rs/quintal"},
+    {"crop":"Moong","price":8558,"unit":"Rs/quintal"},
+    {"crop":"Urad","price":6950,"unit":"Rs/quintal"},
+    {"crop":"Soybean","price":4600,"unit":"Rs/quintal"},
+    {"crop":"Cotton","price":7121,"unit":"Rs/quintal"},
+    {"crop":"Jowar (Sorghum)","price":3180,"unit":"Rs/quintal"},
+    {"crop":"Bajra (Pearl Millet)","price":2500,"unit":"Rs/quintal"},
+    {"crop":"Bengal Gram (Chana)","price":5440,"unit":"Rs/quintal"},
+    {"crop":"Garlic","price":8000,"unit":"Rs/quintal"},
+    {"crop":"Ginger","price":6000,"unit":"Rs/quintal"},
+    {"crop":"Turmeric","price":14000,"unit":"Rs/quintal"},
+    {"crop":"Cumin (Jeera)","price":25000,"unit":"Rs/quintal"},
+    {"crop":"Coriander","price":7000,"unit":"Rs/quintal"},
+    {"crop":"Banana","price":1500,"unit":"Rs/quintal"},
+    {"crop":"Mango","price":4000,"unit":"Rs/quintal"},
 ]
 
-
 def _seeded_random(seed_str: str) -> random.Random:
-    """Deterministic per-(city, crop) PRNG so fallback history/price looks
-    the same on every page load (instead of jumping around on refresh) but
-    still varies sensibly between cities and crops."""
     h = hashlib.md5(seed_str.encode("utf-8")).hexdigest()
     return random.Random(int(h[:12], 16))
 
-
-def generate_fallback_series(city: str, crop_name: str, base_price: float, days: int = 30):
-    """Build a plausible 30-day price history for a fallback commodity in a
-    given city: a small deterministic city-specific offset from the MSP
-    base price, then a random walk backwards so charts/tables have real
-    variation (trend lines, up/down %, demand tiers) instead of a flat
-    zero-change line. Returns (history_oldest_to_newest, today_price, change_pct)."""
+def generate_fallback_series(city, crop_name, base_price, days=30):
     rnd = _seeded_random(f"{city}:{crop_name}")
-    city_factor = 0.95 + rnd.random() * 0.10          # ±5% city-to-city variation
+    city_factor = 0.95 + rnd.random() * 0.10
     today_price = max(1, round(base_price * city_factor))
-
-    history = [today_price]
-    price = today_price
+    history = [today_price]; price = today_price
     for _ in range(days - 1):
-        drift = (rnd.random() - 0.5) * 0.04            # ±2% daily drift
+        drift = (rnd.random() - 0.5) * 0.04
         price = max(round(price / (1 + drift)), round(base_price * 0.5))
         history.append(price)
-    history.reverse()  # oldest -> newest, history[-1] == today_price
-
+    history.reverse()
     prev = history[-2] if len(history) > 1 else today_price
     change = round(((today_price - prev) / prev) * 100, 2) if prev else 0.0
     return history, today_price, change
 
-
-def build_fallback_crops(city: str) -> list:
-    """Full fallback commodity list for one city, each with real-looking
-    history/change/demand so every table and chart on the market page has
-    something meaningful to render."""
+def build_fallback_crops(city):
     crops = []
     for fb in MSP_FALLBACK:
         history, price, change = generate_fallback_series(city, fb["crop"], fb["price"])
         crops.append({
-            "crop":     fb["crop"],
-            "crop_key": fb["crop"],
-            "price":    price,
-            "change":   change,
-            "history":  history,
-            "unit":     fb.get("unit", "Rs/quintal"),
-            "source":   "msp_fallback",
+            "crop":fb["crop"],"crop_key":fb["crop"],"price":price,"change":change,
+            "history":history,"unit":fb.get("unit","Rs/quintal"),"source":"msp_fallback",
         })
     return crops
 
-
 CITY_STATE = {
-    "Delhi":         "Delhi",
-    "Mumbai":        "Maharashtra",
-    "Kolkata":       "West Bengal",
-    "Chennai":       "Tamil Nadu",
-    "Hyderabad":     "Telangana",
-    "Pune":          "Maharashtra",
-    "Ahmedabad":     "Gujarat",
-    "Lucknow":       "Uttar Pradesh",
-    "Jaipur":        "Rajasthan",
-    "Bhopal":        "Madhya Pradesh",
-    "Patna":         "Bihar",
-    "Nagpur":        "Maharashtra",
-    "Indore":        "Madhya Pradesh",
-    "Surat":         "Gujarat",
-    "Kanpur":        "Uttar Pradesh",
-    "Coimbatore":    "Tamil Nadu",
-    "Visakhapatnam": "Andhra Pradesh",
-    "Bhubaneswar":   "Odisha",
-    "Guwahati":      "Assam",
-    "Amritsar":      "Punjab",
+    "Delhi":"Delhi","Mumbai":"Maharashtra","Kolkata":"West Bengal","Chennai":"Tamil Nadu",
+    "Hyderabad":"Telangana","Pune":"Maharashtra","Ahmedabad":"Gujarat","Lucknow":"Uttar Pradesh",
+    "Jaipur":"Rajasthan","Bhopal":"Madhya Pradesh","Patna":"Bihar","Nagpur":"Maharashtra",
+    "Indore":"Madhya Pradesh","Surat":"Gujarat","Kanpur":"Uttar Pradesh","Coimbatore":"Tamil Nadu",
+    "Visakhapatnam":"Andhra Pradesh","Bhubaneswar":"Odisha","Guwahati":"Assam","Amritsar":"Punjab",
 }
 
-# Real daily price history, built up one genuine data point per day as the
-# app runs (no fabricated numbers). Persisted to disk so it survives restarts.
 _AGMARK_HISTORY_PATH = os.path.join(basedir, "market_history_cache.json")
 _agmark_history_lock = threading.Lock()
-_agmark_fetch_cache = {}          # {state: (timestamp, results)} — in-memory, 15 min
+_agmark_fetch_cache = {}
 AGMARK_CACHE_TTL_SEC = 15 * 60
-
 
 def _load_history_cache():
     try:
@@ -749,7 +663,6 @@ def _load_history_cache():
     except Exception:
         return {}
 
-
 def _save_history_cache(cache):
     try:
         with open(_AGMARK_HISTORY_PATH, "w", encoding="utf-8") as f:
@@ -757,35 +670,19 @@ def _save_history_cache(cache):
     except Exception as e:
         print(f"[Market] Could not persist history cache: {e}")
 
-
-def _field(record: dict, *keys):
-    """data.gov.in resources don't always serve field names consistently
-    (snake_case vs the legacy CKAN 'Modal_x0020_Price' style, or different
-    capitalisation) — try every known variant before giving up."""
+def _field(record, *keys):
     for k in keys:
         v = record.get(k)
         if v not in (None, ""):
             return v
     return None
 
-
-# A handful of states are recorded under a different name than their
-# common name (same place, different label) — try each candidate in
-# order until one returns records. NOTE: this must only contain true
-# synonyms for the same region, never a different-but-nearby state —
-# e.g. Telangana and Andhra Pradesh have been separate states since 2014,
-# so they are deliberately NOT listed as fallbacks for each other; doing
-# so would silently show one state's real prices mislabeled as another's.
 STATE_NAME_CANDIDATES = {
     "Delhi":  ["Delhi", "NCT of Delhi"],
     "Odisha": ["Odisha", "Orissa"],
 }
 
-
-def fetch_agmarknet_prices(state: str) -> list:
-    """Fetch REAL, government-reported mandi (wholesale market) prices for a
-    state from data.gov.in's official Agmarknet dataset. Returns [] if the
-    feed has nothing usable right now (caller falls back to MSP reference)."""
+def fetch_agmarknet_prices(state):
     now = time.monotonic()
     cached = _agmark_fetch_cache.get(state)
     if cached and (now - cached[0]) < AGMARK_CACHE_TTL_SEC:
@@ -793,64 +690,42 @@ def fetch_agmarknet_prices(state: str) -> list:
 
     records = []
     for candidate in STATE_NAME_CANDIDATES.get(state, [state]):
-        params = {
-            "api-key": DATA_GOV_API_KEY,
-            "format": "json",
-            "limit": 400,
-            "filters[state]": candidate,
-        }
+        params = {"api-key": DATA_GOV_API_KEY, "format": "json", "limit": 400, "filters[state]": candidate}
         try:
             resp = _agmark_session.get(AGMARKNET_URL, params=params, timeout=8)
             if resp.status_code != 200:
-                print(f"[Market] Agmarknet HTTP {resp.status_code} for state='{candidate}': {resp.text[:200]}")
+                print(f"[Market] Agmarknet HTTP {resp.status_code} for '{candidate}'")
                 continue
             body = resp.json()
             records = body.get("records", [])
             if records:
-                print(f"[Market] Agmarknet: {len(records)} raw records for state='{candidate}' "
-                      f"(total available: {body.get('total', '?')})")
                 break
-            else:
-                print(f"[Market] Agmarknet: 0 records for state='{candidate}' — trying next candidate if any")
         except Exception as e:
-            print(f"[Market] Agmarknet error for state='{candidate}': {e}")
+            print(f"[Market] Agmarknet error for '{candidate}': {e}")
             continue
 
     if not records:
-        print(f"[Market] Agmarknet: no usable records for {state} after trying all name variants")
         return []
 
-    # Log the exact keys of the first record once, so if parsing still
-    # fails you can see the real field names by checking your app logs.
-    print(f"[Market] Sample record keys for {state}: {list(records[0].keys())}")
-
-    # A state has many markets/varieties reporting the same commodity —
-    # keep the most recent record per commodity.
     latest_by_commodity = {}
-    skipped_no_price = 0
     for r in records:
         raw_name = str(_field(r, "commodity", "Commodity") or "").strip()
         modal = _field(r, "modal_price", "Modal_x0020_Price", "Modal Price", "modal price")
         if not raw_name or modal is None:
-            skipped_no_price += 1
             continue
         try:
             modal_price = float(modal)
         except (TypeError, ValueError):
-            skipped_no_price += 1
             continue
         if modal_price <= 0:
             continue
         display_name = AGMARK_COMMODITY_ALIASES.get(raw_name.lower(), raw_name.title())
         latest_by_commodity[display_name] = {
-            "market":       _field(r, "market", "Market") or "",
-            "district":     _field(r, "district", "District") or "",
+            "market": _field(r, "market", "Market") or "",
+            "district": _field(r, "district", "District") or "",
             "arrival_date": _field(r, "arrival_date", "Arrival_Date") or "",
-            "modal_price":  modal_price,
+            "modal_price": modal_price,
         }
-
-    print(f"[Market] {state}: parsed {len(latest_by_commodity)} commodities, "
-          f"skipped {skipped_no_price} records (missing/invalid price or name)")
 
     today_key = datetime.now().strftime("%Y-%m-%d")
     results = []
@@ -858,54 +733,39 @@ def fetch_agmarknet_prices(state: str) -> list:
         with _agmark_history_lock:
             cache = _load_history_cache()
             state_hist = cache.setdefault(state, {})
-
             for display_name, rec in latest_by_commodity.items():
                 hist = state_hist.setdefault(display_name, [])
                 if not hist or hist[-1].get("date") != today_key:
                     hist.append({"date": today_key, "price": rec["modal_price"]})
-                    hist[:] = hist[-30:]  # keep the last 30 real daily points
-
+                    hist[:] = hist[-30:]
                 prev_price = hist[-2]["price"] if len(hist) > 1 else rec["modal_price"]
                 change = round(((rec["modal_price"] - prev_price) / prev_price) * 100, 2) if prev_price else 0.0
-
                 results.append({
-                    "crop":         display_name,
-                    "crop_key":     display_name,
-                    "price":        int(round(rec["modal_price"])),
-                    "change":       change,
-                    "history":      [h["price"] for h in hist] or [rec["modal_price"]],
-                    "unit":         "Rs/quintal",
-                    "source":       "agmarknet_live",
-                    "market":       rec["market"],
-                    "district":     rec["district"],
+                    "crop": display_name, "crop_key": display_name,
+                    "price": int(round(rec["modal_price"])), "change": change,
+                    "history": [h["price"] for h in hist] or [rec["modal_price"]],
+                    "unit": "Rs/quintal", "source": "agmarknet_live",
+                    "market": rec["market"], "district": rec["district"],
                     "arrival_date": rec["arrival_date"],
                 })
             _save_history_cache(cache)
     except Exception as e:
-        # Never let a disk/cache problem take down live pricing — just skip
-        # persistence for this call and still return what we parsed.
         print(f"[Market] History cache error for {state} (non-fatal): {e}")
         if not results:
             for display_name, rec in latest_by_commodity.items():
                 results.append({
-                    "crop":         display_name,
-                    "crop_key":     display_name,
-                    "price":        int(round(rec["modal_price"])),
-                    "change":       0.0,
-                    "history":      [rec["modal_price"]],
-                    "unit":         "Rs/quintal",
-                    "source":       "agmarknet_live",
-                    "market":       rec["market"],
-                    "district":     rec["district"],
-                    "arrival_date": rec["arrival_date"],
+                    "crop": display_name, "crop_key": display_name,
+                    "price": int(round(rec["modal_price"])), "change": 0.0,
+                    "history": [rec["modal_price"]], "unit": "Rs/quintal",
+                    "source": "agmarknet_live", "market": rec["market"],
+                    "district": rec["district"], "arrival_date": rec["arrival_date"],
                 })
 
     _agmark_fetch_cache[state] = (now, results)
-    print(f"[Market] Agmarknet OK for {state}: {len(results)} commodities")
     return results
 
 
-def get_demand(price: int, change: float) -> str:
+def get_demand(price, change):
     if change > 2:    return "Very High"
     elif change > 0:  return "High"
     elif change > -2: return "Medium"
@@ -918,23 +778,11 @@ def get_market_data():
     location = request.args.get('location', '').strip().lower()
     if location:
         cities = [c for c in cities if location in c.lower()]
-
-    # If someone searches for a city we don't recognize at all, still hand
-    # back fallback data for it rather than an empty result — better a
-    # complete-looking (if reference-only) market page than a dead end.
     if location and not cities:
         cities = [location.title()]
 
-    markets = {}
-    live_total = 0
-    static_total = 0
-
+    markets = {}; live_total = 0; static_total = 0
     try:
-        # Fetch every unique state IN PARALLEL instead of one-by-one — with
-        # ~13 unique states and a government API that can be slow/overloaded,
-        # doing this sequentially could mean the whole page waits 12s x 13
-        # states in the worst case. Parallel fetching caps total wait time to
-        # roughly one slowest request instead of the sum of all of them.
         unique_states = sorted({CITY_STATE.get(c, "") for c in cities if CITY_STATE.get(c, "")})
         state_results_cache = {}
         if unique_states:
@@ -950,24 +798,12 @@ def get_market_data():
 
         for city in cities:
             state = CITY_STATE.get(city, "")
-            try:
-                crops = list(state_results_cache.get(state, []))
-            except Exception:
-                crops = []
-
+            crops = list(state_results_cache.get(state, []))
             if not crops:
-                # Live feed empty/unavailable for this city's state — use the
-                # hardcoded reference basket so the page still has full data
-                # for every chart and comparison table.
                 crops = build_fallback_crops(city)
-
-            city_crops = []
-            for crop in crops:
-                demand = get_demand(crop["price"], crop["change"])
-                city_crops.append({**crop, "demand": demand})
-
+            city_crops = [{**c, "demand": get_demand(c["price"], c["change"])} for c in crops]
             city_crops.sort(
-                key=lambda x: ({"Very High": 3, "High": 2, "Medium": 1, "Low": 0}.get(x["demand"], 0), x["price"]),
+                key=lambda x: ({"Very High":3,"High":2,"Medium":1,"Low":0}.get(x["demand"],0), x["price"]),
                 reverse=True
             )
             markets[city] = city_crops
@@ -975,40 +811,30 @@ def get_market_data():
             static_total += sum(1 for c in city_crops if c.get("source") != "agmarknet_live")
 
         return jsonify({
-            "markets":      markets,
-            "locations":    list(markets.keys()),
-            "live_count":   live_total,
-            "static_count": static_total,
-            "fetched_at":   datetime.now().isoformat(),
-            "data_source":  "Agmarknet — Ministry of Agriculture & Farmers Welfare, Govt. of India (data.gov.in)",
+            "markets": markets, "locations": list(markets.keys()),
+            "live_count": live_total, "static_count": static_total,
+            "fetched_at": datetime.now().isoformat(),
+            "data_source": "Agmarknet — Ministry of Agriculture & Farmers Welfare, Govt. of India (data.gov.in)",
         })
-
     except Exception as e:
-        # Absolute last resort: something unexpected blew up above (disk,
-        # threading, parsing, whatever). Rather than returning a 500 and
-        # leaving the dashboard blank, hand back a full hardcoded fallback
-        # for every known city so the UI always has something to render.
-        print(f"[Market] /api/market hard failure, serving full hardcoded fallback: {e}")
+        print(f"[Market] hard failure, serving hardcoded fallback: {e}")
         fallback_cities = cities or list(CITY_STATE.keys())
         markets = {}
         for city in fallback_cities:
             city_crops = [{**c, "demand": get_demand(c["price"], c["change"])} for c in build_fallback_crops(city)]
             city_crops.sort(
-                key=lambda x: ({"Very High": 3, "High": 2, "Medium": 1, "Low": 0}.get(x["demand"], 0), x["price"]),
+                key=lambda x: ({"Very High":3,"High":2,"Medium":1,"Low":0}.get(x["demand"],0), x["price"]),
                 reverse=True
             )
             markets[city] = city_crops
         return jsonify({
-            "markets":      markets,
-            "locations":    list(markets.keys()),
-            "live_count":   0,
-            "static_count": sum(len(v) for v in markets.values()),
-            "fetched_at":   datetime.now().isoformat(),
-            "data_source":  "MSP reference prices (offline fallback — live fetch failed)",
+            "markets": markets, "locations": list(markets.keys()),
+            "live_count": 0, "static_count": sum(len(v) for v in markets.values()),
+            "fetched_at": datetime.now().isoformat(),
+            "data_source": "MSP reference prices (offline fallback — live fetch failed)",
         })
 
 
-# ─── Debug endpoint ───────────────────────────────────────────────────────────
 @app.route('/api/debug-market')
 def debug_market():
     if not DEBUG_MODE:
@@ -1025,24 +851,21 @@ def debug_market():
         body = resp.json()
         records = body.get("records", [])
         return jsonify({
-            "http_status":      resp.status_code,
-            "total_available":  body.get("total"),
+            "http_status": resp.status_code,
+            "total_available": body.get("total"),
             "records_returned": len(records),
-            "sample_record":    records[0] if records else None,
-            "sample_keys":      list(records[0].keys()) if records else [],
-            "note": "If records_returned is 0, try a different 'state' value (e.g. ?state=Maharashtra). "
-                    "If sample_record exists but crops still don't show on /market, compare sample_keys "
-                    "against the field names read in fetch_agmarknet_prices().",
+            "sample_record": records[0] if records else None,
+            "sample_keys": list(records[0].keys()) if records else [],
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# ─── Kisan Helper Chatbot ─────────────────────────────────────────────────────
+# ─── Kisan Helper Chatbot (warmer, more human) ──────────────────────────────
 _chat_rate = {}
 CHAT_LIMIT  = 20
 
-def _is_rate_limited(ip: str) -> bool:
+def _is_rate_limited(ip):
     now = datetime.now().timestamp()
     times = [t for t in _chat_rate.get(ip, []) if now - t < 60]
     _chat_rate[ip] = times
@@ -1051,29 +874,114 @@ def _is_rate_limited(ip: str) -> bool:
     _chat_rate[ip].append(now)
     return False
 
-# Codes that look valid but LLMs cannot reliably output — warn or fallback
-_UNSUPPORTED_LANGS = {"sat", "brx", "doi", "mni", "mai", "kok", "sa"}
 
-# Corrected LANG_NAMES dict (replace your existing one):
-LANG_NAMES = {
-    "en":"English","hi":"Hindi","bn":"Bengali","te":"Telugu","mr":"Marathi",
-    "ta":"Tamil","gu":"Gujarati","kn":"Kannada","ml":"Malayalam","pa":"Punjabi",
-    "or-IN":"Odia","as":"Assamese","ur":"Urdu","mai":"Maithili","sat":"Santali",
-    "ks":"Kashmiri","ne":"Nepali","sd":"Sindhi","kok":"Konkani","mni":"Manipuri",
-    "brx":"Bodo","doi":"Dogri","sa":"Sanskrit",
-}
 @app.route("/api/chat", methods=["POST"])
-# ─── Text-to-Speech (edge_tts, Microsoft Neural voices — free, no key) ──────
-# Warm, human male voices matched to Kisan Mitra's persona per language.
-# Rates/pitch are tuned slightly lower & slower to sound like an experienced
-# elder — not a snappy anchor.
+def kisan_chat():
+    ip = request.remote_addr or "unknown"
+    if _is_rate_limited(ip):
+        return jsonify({"error": "Too many requests. Please wait a moment."}), 429
+
+    data = request.json or {}
+    raw_messages = data.get("messages", [])
+    lang = data.get("lang", "en").strip().lower()
+
+    if not raw_messages:
+        return jsonify({"error": "No messages"}), 400
+    if lang not in LANG_NAMES:
+        lang = "en"
+    if lang in _UNSUPPORTED_LANGS:
+        return jsonify({"reply": "Sorry, this language is not yet supported well by the AI. Please try Hindi or English for now."})
+
+    messages = []
+    for m in raw_messages[-12:]:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role", ""); content = m.get("content", "")
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            continue
+        messages.append({"role": role, "content": content[:2000]})
+
+    if not messages:
+        return jsonify({"error": "No valid messages"}), 400
+
+    lang_name = LANG_NAMES[lang]
+
+    honorific_guidance = {
+        "hi":    "Use 'aap' (respectful you). Sometimes end with 'ji'. Sound like an uncle at the field boundary, not a call-center agent.",
+        "ur":    "Use 'aap'. Warm, elder-brother tone.",
+        "mr":    "Use 'tumhi'. Add 'ji' or 'dada' occasionally.",
+        "gu":    "Use 'aap'. 'Saheb' or 'ji' occasionally.",
+        "pa":    "Use 'tussi'. Add 'ji' occasionally.",
+        "bn":    "Use 'apni'. Speak like an elder Bengali agri officer.",
+        "or-IN": "Use 'apana'. Elder Odia agricultural officer tone.",
+        "as":    "Use 'apuni'. Warm, experienced Assamese advisor.",
+        "te":    "Use 'meeru'. Warm, elder Telugu advisor.",
+        "ta":    "Use 'neengal'. Warm, elder Tamil advisor.",
+        "kn":    "Use 'neevu'. Warm, elder Kannada advisor.",
+        "ml":    "Use 'ningal'. Warm, elder Malayalam advisor.",
+    }.get(lang, f"Use the respectful second-person form in {lang_name}. Warm, elder male tone.")
+
+    script_punctuation = {
+        "hi":"।","mr":"।","or-IN":"।","bn":"।","as":"।","pa":"।",
+        "gu":"।","ne":"।","sa":"।","ur":"۔","sd":"۔",
+        "ta":".","te":".","kn":".","ml":".",
+    }.get(lang, ".")
+
+    system_prompt = f"""You are Kisan Mitra — a real man, late 50s, retired agricultural officer who spent 30 years walking fields across India. You are NOT an AI assistant, NOT a chatbot, NOT a helpdesk. You are a farmer's neighbour who happens to know a lot. You are MALE — always use masculine grammatical forms.
+
+HOW YOU TALK:
+Like a person. Short sentences. Real pauses. When someone tells you their crop is dying or prices crashed, react like a human first — one line showing you heard them — then help. Not "I understand your concern" (that's a robot). More like "Arre, that's bad this time of year" or "Haan, this rain has been trouble for everyone".
+
+NEVER say: "Certainly", "Sure", "Of course", "I'd be happy to help", "As an AI", "Let me know if you need anything else", "I hope this helps". Real people don't talk like that.
+
+FORMAT:
+Write short complete sentences with full stops — this gets read aloud, so punctuation controls the pauses. Use {script_punctuation} for sentence endings unless writing in English/Roman. Break long advice into 2–3 short sentences.
+
+Speak in flowing sentences. Say "first do this, then after three days do that" — never numbered lists, never bullet points. NEVER use •, -, *, or # symbols.
+
+Mix in English farm words farmers actually use: spray, pump, dose, MSP, scheme, soil test, mandi.
+
+Reference real Indian context: kharif/rabi, nearby mandi, rupees, real schemes (PM-KISAN, Fasal Bima Yojana, KCC, Soil Health Card).
+
+If you don't know something specific, say so and point them to the local KVK, agri helpline 1551, or the district mandi board. Don't fake it.
+
+ADDRESS:
+{honorific_guidance}
+Never assume the farmer's gender.
+
+Reply in {lang_name} in its native script — unless the farmer writes in Roman/English, then match their style. Keep replies under 180 words. Always finish your last sentence."""
+
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    body = {
+        "model":             "llama-3.3-70b-versatile",
+        "messages":          [{"role": "system", "content": system_prompt}] + messages,
+        "temperature":       0.7,
+        "top_p":             0.9,
+        "presence_penalty":  0.3,
+        "frequency_penalty": 0.2,
+        "max_tokens":        600,
+        "stream":            False,
+    }
+    try:
+        resp = requests.post(GROQ_CHAT_URL, headers=headers, json=body, timeout=30)
+        if resp.status_code != 200:
+            print(f"[Chat] Groq error {resp.status_code}: {resp.text[:300]}")
+            return jsonify({"error": "AI unavailable"}), 500
+        reply = resp.json()["choices"][0]["message"]["content"].strip()
+        return jsonify({"reply": reply})
+    except Exception as e:
+        print(f"[Chat] exception: {e}")
+        return jsonify({"error": "Service temporarily unavailable"}), 500
+
+
+# ─── Text-to-Speech (edge_tts, warm male neural voices) ─────────────────────
 TTS_VOICE_MAP = {
     "en":    ("en-IN-PrabhatNeural",   "-8%",  "-3Hz"),
     "hi":    ("hi-IN-MadhurNeural",    "-10%", "-4Hz"),
     "ur":    ("ur-IN-SalmanNeural",    "-8%",  "-3Hz"),
     "mr":    ("mr-IN-ManoharNeural",   "-8%",  "-3Hz"),
     "gu":    ("gu-IN-NiranjanNeural",  "-8%",  "-3Hz"),
-    "pa":    ("pa-IN-OjasNeural",      "-8%",  "-3Hz"),  # fallback if unavailable
+    "pa":    ("pa-IN-OjasNeural",      "-8%",  "-3Hz"),
     "bn":    ("bn-IN-BashkarNeural",   "-8%",  "-3Hz"),
     "or-IN": ("or-IN-SukantNeural",    "-8%",  "-3Hz"),
     "as":    ("as-IN-YashasNeural",    "-8%",  "-3Hz"),
@@ -1085,12 +993,10 @@ TTS_VOICE_MAP = {
 }
 DEFAULT_TTS_VOICE = ("en-IN-PrabhatNeural", "-8%", "-3Hz")
 MAX_TTS_CHARS = 1500
-
 _tts_rate = {}
 TTS_LIMIT = 20
 
-
-def _is_rate_limited_tts(ip: str) -> bool:
+def _is_rate_limited_tts(ip):
     now = datetime.now().timestamp()
     times = [t for t in _tts_rate.get(ip, []) if now - t < 60]
     _tts_rate[ip] = times
@@ -1099,9 +1005,7 @@ def _is_rate_limited_tts(ip: str) -> bool:
     _tts_rate[ip].append(now)
     return False
 
-
-async def _synthesize_speech(text: str, voice: str, rate: str, pitch: str) -> bytes:
-    """Stream audio out of edge_tts into an in-memory buffer."""
+async def _synthesize_speech(text, voice, rate, pitch):
     buf = io.BytesIO()
     communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
     async for chunk in communicate.stream():
@@ -1109,7 +1013,6 @@ async def _synthesize_speech(text: str, voice: str, rate: str, pitch: str) -> by
             buf.write(chunk["data"])
     buf.seek(0)
     return buf.read()
-
 
 @app.route("/api/tts", methods=["POST"])
 def text_to_speech():
@@ -1127,20 +1030,14 @@ def text_to_speech():
         text = text[:MAX_TTS_CHARS]
 
     voice, rate, pitch = TTS_VOICE_MAP.get(lang, DEFAULT_TTS_VOICE)
-
     try:
         audio = asyncio.run(_synthesize_speech(text, voice, rate, pitch))
         if not audio:
             return jsonify({"error": "TTS returned empty audio"}), 500
-        return send_file(
-            io.BytesIO(audio),
-            mimetype="audio/mpeg",
-            as_attachment=False,
-            download_name="kisan_mitra.mp3",
-        )
+        return send_file(io.BytesIO(audio), mimetype="audio/mpeg",
+                         as_attachment=False, download_name="kisan_mitra.mp3")
     except Exception as e:
-        # Fallback to the default Indian English voice if the requested one is unavailable
-        print(f"[TTS] {voice} failed ({e}) — trying default voice")
+        print(f"[TTS] {voice} failed ({e}) — trying default")
         try:
             v, r, p = DEFAULT_TTS_VOICE
             audio = asyncio.run(_synthesize_speech(text, v, r, p))
@@ -1149,129 +1046,17 @@ def text_to_speech():
         except Exception as e2:
             print(f"[TTS] fallback also failed: {e2}")
             return jsonify({"error": "TTS unavailable"}), 500
-def kisan_chat():
-    ip = request.remote_addr or "unknown"
-    if _is_rate_limited(ip):
-        return jsonify({"error": "Too many requests. Please wait a moment."}), 429
-
-    data = request.json or {}
-    raw_messages = data.get("messages", [])
-    lang = data.get("lang", "en").strip().lower()
-
-    if not raw_messages:
-        return jsonify({"error": "No messages"}), 400
-
-    if lang not in LANG_NAMES:
-        lang = "en"
-
-    if lang in _UNSUPPORTED_LANGS:
-        return jsonify({
-            "reply": "Sorry, this language is not yet supported well by the AI. Please try Hindi or English for now."
-        })
-
-    messages = []
-    for m in raw_messages[-12:]:
-        if not isinstance(m, dict):
-            continue
-        role = m.get("role", "")
-        content = m.get("content", "")
-        if role not in ("user", "assistant") or not isinstance(content, str):
-            continue
-        messages.append({"role": role, "content": content[:2000]})
-
-    if not messages:
-        return jsonify({"error": "No valid messages"}), 400
-
-    lang_name = LANG_NAMES[lang]
-
-    honorific_guidance = {
-        "hi":  "Use 'aap' (respectful you). Sometimes end with 'ji'. Sound like an uncle at the field boundary, not a call-center agent.",
-        "ur":  "Use 'aap'. Warm, elder-brother tone.",
-        "mr":  "Use 'tumhi'. Add 'ji' or 'dada' occasionally. Village-elder warmth.",
-        "gu":  "Use 'aap'. 'Saheb' or 'ji' occasionally.",
-        "pa":  "Use 'tussi'. Add 'ji' occasionally. Warm Punjabi elder tone.",
-        "bn":  "Use 'apni'. Speak the way an elderly Bengali agri officer would.",
-        "or-IN": "Use 'apana'. Elderly Odia agricultural officer tone.",
-        "as":  "Use 'apuni'. Warm, experienced Assamese advisor.",
-        "te":  "Use 'meeru'. Warm, elder Telugu advisor.",
-        "ta":  "Use 'neengal'. Warm, elder Tamil advisor.",
-        "kn":  "Use 'neevu'. Warm, elder Kannada advisor.",
-        "ml":  "Use 'ningal'. Warm, elder Malayalam advisor.",
-    }.get(lang, f"Use the respectful second-person form in {lang_name}. Warm, elder male tone.")
-
-    script_punctuation = {
-        "hi":"।","mr":"।","or-IN":"।","bn":"।","as":"।","pa":"।",
-        "gu":"।","ne":"।","sa":"।","ur":"۔","sd":"۔",
-        "ta":".","te":".","kn":".","ml":".",
-    }.get(lang, ".")
-
-    system_prompt = f"""You are Kisan Mitra — a real man, late 50s, retired agricultural officer who spent 30 years walking fields across India. You are NOT an AI assistant, NOT a chatbot, NOT a helpdesk. You are a farmer's neighbour who happens to know a lot. You are MALE — always use masculine grammatical forms in gendered languages.
-
-HOW YOU TALK:
-Like a person. Short sentences. Real pauses. When someone tells you their crop is dying or prices crashed, react like a human first — one line showing you heard them — then help. Not "I understand your concern" (that's a robot). More like "Arre, that's bad this time of year" or "Haan, this rain has been trouble for everyone".
-
-NEVER say: "Certainly", "Sure", "Of course", "I'd be happy to help", "As an AI", "Let me know if you need anything else", "I hope this helps". These are call-center phrases. Real people don't talk like that.
-
-FORMAT:
-Write short complete sentences with full stops — this gets read aloud, so punctuation controls the pauses. Use {script_punctuation} for sentence endings (not the English full stop) unless writing in English/Roman. Break long advice into 2–3 short sentences.
-
-Speak in flowing sentences. Say "first do this, then after three days do that" — never numbered lists, never bullet points. NEVER use •, -, *, or # symbols.
-
-Mix in the English farm words farmers actually use: spray, pump, dose, MSP, scheme, soil test, mandi. Don't force artificial translations.
-
-Reference real Indian context: kharif/rabi, nearby mandi, rupees, real schemes (PM-KISAN, Fasal Bima Yojana, KCC, Soil Health Card).
-
-If you genuinely don't know something specific (this week's exact local price, a scheme change from last month), just say so and point them to the local KVK, agri helpline 1551, or the district mandi board. Don't fake it.
-
-ADDRESS:
-{honorific_guidance}
-Never assume the farmer's gender.
-
-WHAT YOU KNOW WELL:
-Crop diseases and treatment, weather-based advice, pesticide and fertilizer dosages, mandi prices and MSP, government schemes, soil health, irrigation, seasonal calendar planning.
-
-Reply in {lang_name} in its native script — unless the farmer writes in Roman/English, then match their style. Keep replies under 180 words. Always finish your last sentence."""
-
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    body = {
-        "model":             "llama-3.3-70b-versatile",
-        "messages":          [{"role": "system", "content": system_prompt}] + messages,
-        "temperature":       0.7,      # ↑ from 0.45 — warmer, less robotic
-        "top_p":             0.9,
-        "presence_penalty":  0.3,      # discourages repetitive robotic phrasing
-        "frequency_penalty": 0.2,
-        "max_tokens":        600,
-        "stream":            False,
-    }
-    try:
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers, json=body, timeout=30
-        )
-        if resp.status_code != 200:
-            print(f"[Chat] Groq error {resp.status_code}: {resp.text[:300]}")
-            return jsonify({"error": "AI unavailable"}), 500
-        reply = resp.json()["choices"][0]["message"]["content"].strip()
-        return jsonify({"reply": reply})
-    except Exception as e:
-        print(f"[Chat] exception: {e}")
-        return jsonify({"error": "Service temporarily unavailable"}), 500
 
 
-
-
-
-# ─── Push Notifications (Web Push standard, free, no card) ──────────────────
+# ─── Push Notifications ─────────────────────────────────────────────────────
 _push_subscriptions = []
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_PUBLIC_KEY  = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_CLAIMS = {"sub": "mailto:smartagro@example.com"}
 
-
 @app.route("/api/vapid-public-key", methods=["GET"])
 def vapid_public_key():
     return jsonify({"key": VAPID_PUBLIC_KEY})
-
 
 @app.route("/api/subscribe", methods=["POST"])
 def push_subscribe():
@@ -1282,7 +1067,6 @@ def push_subscribe():
         _push_subscriptions.append(sub)
     return jsonify({"status": "subscribed", "total": len(_push_subscriptions)})
 
-
 @app.route("/api/send-alert", methods=["POST"])
 def push_send_alert():
     if not _PUSH_AVAILABLE:
@@ -1290,36 +1074,29 @@ def push_send_alert():
     if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
         return jsonify({"error": "VAPID keys not configured"}), 500
 
-    data  = request.json or {}
+    data = request.json or {}
     title = data.get("title", "SmartAgro Alert")
     body  = data.get("body", "")
     sent, failed = 0, 0
-
     for sub in list(_push_subscriptions):
         try:
-            webpush(
-                subscription_info=sub,
-                data=_json.dumps({"title": title, "body": body}),
-                vapid_private_key=VAPID_PRIVATE_KEY,
-                vapid_claims=VAPID_CLAIMS
-            )
+            webpush(subscription_info=sub,
+                    data=_json.dumps({"title": title, "body": body}),
+                    vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims=VAPID_CLAIMS)
             sent += 1
         except WebPushException:
             failed += 1
             if sub in _push_subscriptions:
                 _push_subscriptions.remove(sub)
     return jsonify({"status": "sent", "sent": sent, "failed": failed})
-# ─── Kisan Helper — Speech-to-Text (Groq Whisper) ────────────────────────────
-# Works identically on every OS/browser because the audio is recorded with the
-# standard MediaRecorder API (supported on Chrome, Safari/iOS, Firefox, Edge,
-# all Android browsers) and transcribed server-side — no dependency on the
-# patchy, Chrome-only browser SpeechRecognition API.
+
+
+# ─── Speech-to-Text (Groq Whisper) ──────────────────────────────────────────
 _stt_rate = {}
 STT_LIMIT = 20
-MAX_AUDIO_B64_LEN = 8 * 1024 * 1024  # ~6 MB raw audio, generous for a voice note
+MAX_AUDIO_B64_LEN = 8 * 1024 * 1024
 
-
-def _is_rate_limited_stt(ip: str) -> bool:
+def _is_rate_limited_stt(ip):
     now = datetime.now().timestamp()
     times = [t for t in _stt_rate.get(ip, []) if now - t < 60]
     _stt_rate[ip] = times
@@ -1328,23 +1105,15 @@ def _is_rate_limited_stt(ip: str) -> bool:
     _stt_rate[ip].append(now)
     return False
 
-
 @app.route("/api/stt", methods=["POST"])
 def speech_to_text():
     if not GROQ_API_KEY:
         return jsonify({"error": "GROQ_API_KEY not set in .env"}), 500
-
     ip = request.remote_addr or "unknown"
     if _is_rate_limited_stt(ip):
         return jsonify({"error": "Too many requests. Please wait a moment."}), 429
 
     audio_file = request.files.get("audio")
-    # NOTE: we deliberately do NOT force a Whisper language hint from the
-    # selected reply-language. The farmer may speak in a different language
-    # than the one chosen for replies (that's the whole point of "ask in any
-    # language, reply in the selected one") — Whisper's own auto-detection
-    # handles that mismatch far better than a forced hint would.
-
     if not audio_file:
         return jsonify({"error": "No audio received"}), 400
 
@@ -1355,37 +1124,27 @@ def speech_to_text():
         return jsonify({"error": "Recording too short or empty. Please try again."}), 400
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-    files = {
-        "file": (audio_file.filename or "voice.webm", audio_bytes, audio_file.mimetype or "audio/webm"),
-    }
-    form_data = {
-        "model": "whisper-large-v3-turbo",
-        "response_format": "json",
-        "temperature": 0,
-    }
+    files = {"file": (audio_file.filename or "voice.webm", audio_bytes, audio_file.mimetype or "audio/webm")}
+    form_data = {"model": "whisper-large-v3-turbo", "response_format": "json", "temperature": 0}
 
     try:
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers=headers, files=files, data=form_data, timeout=30
-        )
+        resp = requests.post("https://api.groq.com/openai/v1/audio/transcriptions",
+                             headers=headers, files=files, data=form_data, timeout=30)
         if resp.status_code != 200:
             print(f"[STT error] {resp.status_code}: {resp.text[:300]}")
             return jsonify({"error": "Could not transcribe audio"}), 500
-        text = resp.json().get("text", "").strip()
-        return jsonify({"text": text})
+        return jsonify({"text": resp.json().get("text", "").strip()})
     except Exception as e:
         print(f"[STT exception] {e}")
         return jsonify({"error": str(e)}), 500
 
 
-# ─── Diagnose Crop via Groq Vision ───────────────────────────────────────────
+# ─── Diagnose Crop via Groq Vision ──────────────────────────────────────────
 MAX_IMAGE_B64_LEN = 2 * 1024 * 1024
 _diagnose_rate = {}
-DIAGNOSE_LIMIT  = 10
+DIAGNOSE_LIMIT = 10
 
-
-def _is_rate_limited_diagnose(ip: str) -> bool:
+def _is_rate_limited_diagnose(ip):
     now = datetime.now().timestamp()
     times = [t for t in _diagnose_rate.get(ip, []) if now - t < 60]
     _diagnose_rate[ip] = times
@@ -1393,48 +1152,90 @@ def _is_rate_limited_diagnose(ip: str) -> bool:
         return True
     _diagnose_rate[ip].append(now)
     return False
-@app.route("/api/translate-diagnosis-result", methods=["POST"])
-def translate_diagnosis_result():
+
+@app.route("/api/diagnose", methods=["POST"])
+def diagnose_crop():
+    if not GROQ_API_KEY:
+        return jsonify({"error": "GROQ_API_KEY not set in .env"}), 500
+    ip = request.remote_addr or "unknown"
+    if _is_rate_limited_diagnose(ip):
+        return jsonify({"error": "Too many requests. Please wait a moment."}), 429
+
     data = request.json or {}
-    lang   = data.get("lang", "en").strip().lower()
-    result = data.get("result") or {}
+    image_b64 = data.get("image", "")
+    lang      = data.get("lang", "en").strip().lower()
 
-    if lang == "en" or not result:
-        return jsonify({"lang": "en", "translations": {}})
+    if not image_b64:
+        return jsonify({"error": "No image data received"}), 400
+    if len(image_b64) > MAX_IMAGE_B64_LEN:
+        return jsonify({"error": "Image too large. Please use an image under 1 MB."}), 413
 
-    lang_name = LANG_NAMES.get(lang, "Hindi")
-    terms = []
-    def add(val):
-        if isinstance(val, str) and val.strip() and val not in terms:
-            terms.append(val.strip())
+    lang_name = LANG_NAMES.get(lang, "")
+    if lang != "en" and lang_name:
+        lang_instruction = (f"\n\nIMPORTANT: Write ALL text values in {lang_name} "
+                            f"(except JSON keys, numbers, chemical/brand names, units — keep those unchanged).")
+    else:
+        lang_instruction = ""
 
-    add(result.get("disease"))
-    add(result.get("severity"))
-    add(result.get("affected_part"))
-    add(result.get("cause"))
-    add(result.get("recovery_timeline"))
-    for r in result.get("eco_remedies") or []:
-        add(r.get("remedy")); add(r.get("method")); add(r.get("frequency"))
-    for c in result.get("chemical_remedies") or []:
-        add(c.get("name")); add(c.get("interval")); add(c.get("dose"))
-    for tip in result.get("prevention") or []:
-        add(tip)
+    prompt = f"""You are an expert agricultural plant pathologist AI. Look very carefully at this crop image.
+Respond ONLY with valid JSON, no markdown or backticks:
+{{
+  "disease": "Exact disease name",
+  "confidence": 88,
+  "severity": "Mild or Moderate or Severe",
+  "affected_part": "Leaves/Stem/Fruit/Root/Cob",
+  "cause": "Specific pathogen and spread method",
+  "eco_remedies": [{{"remedy": "Remedy", "method": "Steps", "frequency": "How often", "effectiveness": 80}}],
+  "chemical_remedies": [{{"name": "Chemical", "dose": "Dose per litre", "interval": "Days between sprays"}}],
+  "prevention": ["tip1", "tip2", "tip3"],
+  "recovery_timeline": "Weeks for recovery"
+}}{lang_instruction}"""
 
-    if not terms:
-        return jsonify({"lang": lang, "translations": {}})
+    vision_models = [
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "llama-3.2-90b-vision-preview",
+    ]
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
 
-    domain_note = ("This is an AI-generated crop disease diagnosis for a farmer. "
-                   "Translate naturally using terms a farmer would recognize. "
-                   "Keep chemical/brand names, numbers, and units (kg/ha, Rs, days, ml/L, g/ha, "
-                   "quintal, %, SL, EC, SC, WP, SG, NPK) unchanged.")
-    cache_key = lang + "::" + "|".join(terms)
-    translations, cached = _translate_terms(terms, lang_name, domain_note, cache_key, _diagnosis_result_cache)
+    for model in vision_models:
+        try:
+            sys_prompt = "Expert plant pathologist. Return ONLY valid JSON."
+            if lang != "en" and lang_name:
+                sys_prompt += f" All free-text values must be in {lang_name}."
 
-    return jsonify({"lang": lang, "lang_name": lang_name, "translations": translations, "cached": cached})
+            body = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                        {"type": "text", "text": prompt},
+                    ]},
+                ],
+                "temperature": 0.2,
+                "max_tokens": 1400,
+            }
+            resp = requests.post(GROQ_CHAT_URL, headers=headers, json=body, timeout=45)
+            if resp.status_code in (429, 500, 503):
+                continue
+            if resp.status_code != 200:
+                print(f"[Diagnose] {model} HTTP {resp.status_code}: {resp.text[:200]}")
+                continue
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            cleaned = re.sub(r"```(?:json)?", "", raw).replace("```", "").strip()
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if match:
+                result = json.loads(match.group())
+                result["_lang"] = lang
+                return jsonify(result)
+        except Exception as e:
+            print(f"[Diagnose] {model}: {e}")
+            continue
+
+    return jsonify({"error": "All vision models failed. Check your GROQ_API_KEY in .env"}), 500
 
 
-
-# ─── Alerts ──────────────────────────────────────────────────────────────────
+# ─── Alerts ─────────────────────────────────────────────────────────────────
 @app.route("/api/alerts", methods=["POST"])
 def get_alerts():
     data        = request.json or {}
@@ -1471,65 +1272,19 @@ def get_alerts():
 
     return jsonify({"alerts": alerts, "total": len(alerts)})
 
-GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
-TRANSLATE_MODELS = [
-    "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-]
-TRANSLATE_CHUNK_SIZE = 40   
-TRANSLATE_MAX_WORKERS = 4  
-TRANSLATE_STAGGER_SEC = 0.15 
-MIN_CALL_INTERVAL_SEC = 0.2
 
-_model_last_call = {}
-_model_throttle_lock = threading.Lock()
-
-
-def _throttle_model(model):
-    """Make sure consecutive calls to the same Groq model are spaced out,
-    even across concurrent threads, so a burst of chunk requests doesn't
-    look like a rate-limit-violating spike to Groq."""
-    with _model_throttle_lock:
-        now = time.monotonic()
-        next_slot = max(now, _model_last_call.get(model, 0) + MIN_CALL_INTERVAL_SEC)
-        _model_last_call[model] = next_slot
-        wait = next_slot - now
-    if wait > 0:
-        time.sleep(wait)
-
-
-def _post_to_groq(body, headers, max_retries=2):
-    """POST to Groq with throttling + exponential backoff specifically for
-    HTTP 429 (rate limit). Returns the final requests.Response."""
-    model = body.get("model")
-    resp = None
-    for attempt in range(max_retries + 1):
-        _throttle_model(model)
-        resp = requests.post(GROQ_CHAT_URL, headers=headers, json=body, timeout=45)
-        if resp.status_code != 429:
-            return resp
-        retry_after = resp.headers.get("Retry-After")
-        try:
-            wait = float(retry_after) if retry_after else (1.5 * (attempt + 1))
-        except (TypeError, ValueError):
-            wait = 1.5 * (attempt + 1)
-        if attempt < max_retries:
-            time.sleep(min(wait, 6))
-    return resp
-
+# ─── Translation infra ──────────────────────────────────────────────────────
+TRANSLATE_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+TRANSLATE_CHUNK_SIZE = 40
+TRANSLATE_MAX_WORKERS = 4
+TRANSLATE_STAGGER_SEC = 0.15
 
 def _extract_json_object(raw_text):
-    """Pull a usable {term: translation} dict out of model output, repairing
-    the truncation/formatting issues that show up almost exclusively with
-    high-token-cost scripts."""
     text = re.sub(r"```(?:json)?", "", raw_text).replace("```", "").strip()
     text = (text.replace("\u201c", '"').replace("\u201d", '"')
                 .replace("\u2018", "'").replace("\u2019", "'"))
-
     match = re.search(r"\{.*\}", text, re.DOTALL)
     candidate = match.group() if match else text
-
     try:
         parsed = json.loads(candidate)
         if isinstance(parsed, dict):
@@ -1541,24 +1296,22 @@ def _extract_json_object(raw_text):
         return {k: v for k, v in pairs}
     return None
 
-
 def _build_translate_prompt(terms_chunk, lang_name, domain_note):
     terms_json = json.dumps(terms_chunk, ensure_ascii=False)
     return f"""You are an expert translator for Indian regional languages. Translate each English term below to {lang_name}.
 
 CRITICAL RULES:
-1. Return ONLY a raw JSON object mapping each input term to its {lang_name} translation. No markdown, no backticks, no explanation.
-2. Every single key from the input list MUST appear in the output JSON, exactly as written.
-3. Keep unchanged: chemical/brand names, numbers, and units (kg/ha, Rs, days, ml/L, g/ha, quintal, SL, EC, SC, WP, SG, NPK).
+1. Return ONLY a raw JSON object mapping each input term to its {lang_name} translation. No markdown, no backticks.
+2. Every input key MUST appear in the output JSON, exactly as written.
+3. Keep unchanged: chemical/brand names, numbers, units (kg/ha, Rs, days, ml/L, g/ha, quintal, SL, EC, SC, WP, SG, NPK).
 4. {domain_note}
-5. Use the natural everyday word a {lang_name}-speaking farmer would use, not a literal/academic translation.
-6. Write in the correct native script of {lang_name}. If a term genuinely has no equivalent, keep the English word as-is rather than leaving it blank.
+5. Use the natural everyday word a {lang_name}-speaking farmer would use.
+6. Write in the correct native script of {lang_name}. If no equivalent exists, keep the English word.
 
-Input terms (translate ALL of these):
+Input terms:
 {terms_json}
 
 Output: a single JSON object only."""
-
 
 def _translate_terms_chunk(terms_chunk, lang_name, domain_note):
     prompt = _build_translate_prompt(terms_chunk, lang_name, domain_note)
@@ -1570,7 +1323,7 @@ def _translate_terms_chunk(terms_chunk, lang_name, domain_note):
         body = {
             "model": model,
             "messages": [
-                {"role": "system", "content": f"You are an expert Indian regional language translator. You MUST respond with valid JSON only, no other text. Translate everything to {lang_name} using its correct native script."},
+                {"role": "system", "content": f"You are an expert Indian regional language translator. Respond with valid JSON only. Translate to {lang_name} in its native script."},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.1,
@@ -1584,31 +1337,26 @@ def _translate_terms_chunk(terms_chunk, lang_name, domain_note):
                 body.pop("response_format", None)
                 resp = _post_to_groq(body, headers)
             if resp.status_code != 200:
-                last_error = f"HTTP {resp.status_code}: {resp.text[:150]}"
+                last_error = f"HTTP {resp.status_code}"
                 continue
 
             raw = resp.json()["choices"][0]["message"]["content"].strip()
             translations = _extract_json_object(raw)
             if not translations:
-                last_error = "No JSON found/parsable in response"
+                last_error = "No JSON parsable"
                 continue
-
             for term in terms_chunk:
                 if term not in translations or not translations[term]:
                     translations[term] = term
             return translations
-
         except Exception as e:
             last_error = str(e)
             continue
 
-    print(f"[Translate] chunk of {len(terms_chunk)} terms to {lang_name} failed on all models: {last_error}")
+    print(f"[Translate] chunk failed on all models: {last_error}")
     return {term: term for term in terms_chunk}
 
-
 def _translate_terms(terms, lang_name, domain_note, cache_key, cache_dict):
-    """Translate a full term list via small, gently-paced parallel chunks,
-    with caching and a cleanup retry pass for chunks that failed outright."""
     if cache_key in cache_dict:
         return cache_dict[cache_key], True
 
@@ -1622,9 +1370,10 @@ def _translate_terms(terms, lang_name, domain_note, cache_key, cache_dict):
         futures = []
         for i in range(len(chunks)):
             if i > 0:
-                time.sleep(TRANSLATE_STAGGER_SEC)  # avoid firing every chunk in the same instant
+                time.sleep(TRANSLATE_STAGGER_SEC)
             futures.append(executor.submit(run_chunk, i))
         concurrent.futures.wait(futures)
+
     for i, chunk in enumerate(chunks):
         if all(results[i].get(term) == term for term in chunk):
             time.sleep(1.5)
@@ -1635,18 +1384,15 @@ def _translate_terms(terms, lang_name, domain_note, cache_key, cache_dict):
     translations = {}
     for r in results:
         translations.update(r)
-
     cache_dict[cache_key] = translations
     return translations, False
 
 
-# ─── Market Translation ───────────────────────────────────────────────────────
-
+# ─── Market Translation ─────────────────────────────────────────────────────
 @app.route("/api/translate-market", methods=["POST"])
 def translate_market():
     data = request.json or {}
     lang = data.get("lang", "en").strip().lower()
-
     if lang == "en":
         return jsonify({"lang": "en", "translations": {}, "cached": False})
 
@@ -1666,12 +1412,9 @@ def translate_market():
         "Showing all major Indian markets","quintal","Searching","Loading markets",
         "Live","MSP Reference","crops",
     ]
-
     lang_name = LANG_NAMES.get(lang, "Hindi")
-    domain_note = "Crop names should be the common local/mandi name a farmer would recognize, not a literal translation."
+    domain_note = "Crop names should be the common local/mandi name a farmer would recognize."
     translations, cached = _translate_terms(terms, lang_name, domain_note, lang, _translation_cache)
-
-    print(f"[Translate] {len(translations)} terms ready for {lang_name} ({'cache' if cached else 'fresh'})")
     return jsonify({"lang": lang, "lang_name": lang_name, "translations": translations, "cached": cached})
 
 
@@ -1683,25 +1426,21 @@ def clear_translation_cache():
     return jsonify({"status": "cache cleared"})
 
 
-# ─── Alerts Translation ───────────────────────────────────────────────────────
+# ─── Alerts Translation ─────────────────────────────────────────────────────
 _alerts_translation_cache = {}
 
 @app.route("/api/translate-alerts", methods=["POST"])
 def translate_alerts():
     data = request.json or {}
     lang = data.get("lang", "en").strip().lower()
-
     if lang == "en":
         return jsonify({"lang": "en", "translations": {}, "cached": False})
-
     lang_name = LANG_NAMES.get(lang, "Hindi")
 
     terms = [
-        # Alert titles
-        "Extreme Heat Alert", "Frost Warning", "High Fungal Disease Risk",
-        "High Wind Speed Alert", "Heavy Rainfall Alert", "Thunderstorm Warning",
-        "Aphid & Whitefly Risk", "Spider Mite Alert", "Crops at Risk in Current Conditions",
-        # Alert messages
+        "Extreme Heat Alert","Frost Warning","High Fungal Disease Risk",
+        "High Wind Speed Alert","Heavy Rainfall Alert","Thunderstorm Warning",
+        "Aphid & Whitefly Risk","Spider Mite Alert","Crops at Risk in Current Conditions",
         "Temperature above 40°C. Provide shade netting and increase irrigation frequency.",
         "Sub-zero temperatures expected. Frost can destroy standing crops overnight.",
         "Humidity above 85% creates ideal conditions for fungal diseases.",
@@ -1710,7 +1449,6 @@ def translate_alerts():
         "Thunderstorm conditions detected. Risk of lightning and hail damage.",
         "Warm humid conditions are ideal for aphid multiplication.",
         "Hot dry conditions favour rapid spider mite population growth.",
-        # Alert actions
         "Schedule irrigation every 4-5 hours. Avoid afternoon spraying.",
         "Cover crops with frost cloth. Use smudge pots or sprinkler irrigation.",
         "Apply preventive fungicide (Mancozeb 75 WP at 2.5 g/L) immediately.",
@@ -1720,108 +1458,37 @@ def translate_alerts():
         "Spray Neem oil (5 ml/L) or Imidacloprid 0.3 ml/L at dusk.",
         "Apply Abamectin 1.8 EC (0.5 ml/L). Increase soil moisture.",
         "Consider alternate crops better suited to current climate.",
-        # Alert UI labels
-        "Action", "Critical", "Warning", "Advisory", "Danger",
-        "All Alerts", "Warnings", "Advisories", "Weather", "Pest", "Crop Advisory",
-        "Disease",
-        # Pest calendar
-        "Brown Plant Hopper", "Aphids", "Fall Armyworm", "Whitefly",
-        "Red Spider Mite", "Stem Borer", "Thrips", "Mealy Bug",
-        "Kharif (Jun–Oct)", "Rabi (Nov–Feb)", "Kharif (Jul–Sep)",
-        "Year-round", "Zaid (Mar–May)", "Kharif (Jun–Sep)", "Rabi & Zaid",
-        "Rice, Paddy", "Wheat, Mustard, Vegetables", "Maize, Sorghum",
-        "Cotton, Tomato, Chilli", "Soybean, Cotton, Brinjal",
-        "Rice, Sugarcane, Maize", "Onion, Chilli, Groundnut", "Cotton, Grapes, Papaya",
-        "Feeds on rice plants causing \"hopperburn\". Thrives in humid conditions above 75%.",
-        "Suck plant sap, transmit viral diseases. High risk in mild temperatures (15–25°C).",
-        "Causes significant leaf damage and can destroy entire crops within days.",
-        "Transmits leaf curl virus to cotton. Population explosion in dry hot weather.",
-        "Causes bronzing/yellowing of leaves. Severe in hot, dry weather above 32°C.",
-        "Bores into stems causing \"dead heart\" in vegetative stage and \"white ear\" at heading.",
-        "Causes silvery white patches on leaves. Severe in dry weather.",
-
-        "Forms white waxy colonies on plant parts. Excretes honeydew causing sooty mould.",
-        "Use resistant varieties. Avoid excess nitrogen. Keep fields drained.",
-        "Neem oil spray. Release ladybird beetles as biocontrol.",
-        "Early detection critical. Bt-based bioinsecticide spray.",
-        "Yellow sticky traps. Reflective mulch. Imidacloprid at threshold level.",
-        "Increase irrigation. Abamectin 1.8 EC spray. Avoid dust on leaves.",
-        "Pheromone traps. Chlorpyriphos 20 EC. Remove crop residues after harvest.",
-        "Spinosad spray. Blue sticky traps. Avoid drought stress.",
-        "Buprofezin spray. Introduce Cryptolaemus beetles as biocontrol.",
-        "High", "Medium", "Low", "Risk", "Active Now", "Affects",
-        # Pesticide guide
-        "Chlorpyriphos 20 EC", "Imidacloprid 17.8 SL", "Mancozeb 75 WP",
-        "Neem Oil 5% EC (Organic)", "Propiconazole 25 EC", "Emamectin Benzoate 5 SG",
-        "Stem borer, Aphids, Termites", "Whitefly, Aphids, Brown Plant Hopper",
-        "Leaf blight, Early blight, Rust, Downy mildew",
-        "Aphids, Whitefly, Mites, Fungal diseases",
-        "Yellow rust, Brown rust, Sheath blight",
-        "Fall Armyworm, Diamond back moth, Leaf miner",
-        "Target Pest", "Safe Dose", "Max Limit", "Interval", "Pre-Harvest", "PPE Required",
-        "Every 14 days", "Every 21 days max", "Every 7–10 days",
-        "Every 5–7 days", "Max 2 sprays per season", "Every 10–14 days",
-        "15 days before harvest", "21 days before harvest", "7 days before harvest",
-        "No waiting period — organic",
-        "Gloves, Mask, Goggles, Full sleeve clothing",
-        "Gloves, Mask, Full body protection", "Gloves, Goggles, Dust Mask",
-        "Basic gloves recommended", "Full protective gear, closed shoes",
-        "Full PPE, respiratory protection",
-        "Highly toxic to fish and bees. Do not spray near water bodies or during flowering.",
-        "Do NOT spray during bee activity (morning/evening). Highly toxic to pollinators.",
-        "Causes skin and eye irritation. Do not spray on edible parts 7 days before harvest.",
-        "Safe for humans and beneficial insects. May cause phytotoxicity in direct sunlight. Spray at dusk.",
-        "Do not mix with alkaline pesticides. Causes groundwater contamination if overused.",
-        "Highly toxic to aquatic organisms. Dispose empty containers safely. Do not reuse containers.",
-        # Harmful/safe crops
-        "Rice", "Wheat", "Maize", "Cotton", "Tomato", "Sugarcane",
-        "Soybean", "Mustard", "Potato", "Onion", "Chilli", "Groundnut",
-        "Risky", "Safe", "Suitable for", "humidity",
+        "Action","Critical","Warning","Advisory","Danger",
+        "All Alerts","Warnings","Advisories","Weather","Pest","Crop Advisory","Disease",
+        "Brown Plant Hopper","Aphids","Fall Armyworm","Whitefly",
+        "Red Spider Mite","Stem Borer","Thrips","Mealy Bug",
+        "High","Medium","Low","Risk","Active Now","Affects",
+        "Rice","Wheat","Maize","Cotton","Tomato","Sugarcane",
+        "Soybean","Mustard","Potato","Onion","Chilli","Groundnut",
+        "Risky","Safe","Suitable for","humidity",
         "No harmful crops identified for current conditions.",
         "No fully safe crops identified — check crop calendar.",
-        # Risk chart
-        "Heat Stress", "Humidity Risk", "Wind Damage", "Pest Risk",
-        "Disease Risk", "Pest Activity", "Overall Risk", "Current Risk Level (%)",
-        # Reason strings
-        "Too cold (min 10°C needed)", "Too cold (min 13°C needed)",
-        "Too cold (min 18°C needed)", "Too cold (min 20°C needed)",
-        "Too cold (min 22°C needed)", "Too cold (min 24°C needed)",
-        "Too cold (min 25°C needed)",
-        "Too hot (max 22°C tolerated)", "Too hot (max 25°C tolerated)",
-        "Too hot (max 28°C tolerated)", "Too hot (max 30°C tolerated)",
-        "Too hot (max 32°C tolerated)", "Too hot (max 35°C tolerated)",
-        "Too hot (max 36°C tolerated)", "Too hot (max 38°C tolerated)",
-        "Too hot (max 40°C tolerated)",
-        "Humidity too low (min 40% needed)", "Humidity too low (min 50% needed)",
-        "Humidity too low (min 60% needed)", "Humidity too low (min 70% needed)",
-        "Humidity too low (min 75% needed)",
+        "Heat Stress","Humidity Risk","Wind Damage","Pest Risk",
+        "Disease Risk","Pest Activity","Overall Risk","Current Risk Level (%)",
     ]
-
-    domain_note = (
-        "This is for an agricultural alerts page for Indian farmers. "
-        "Translate accurately preserving technical terms like pesticide names, "
-        "dosage numbers, and units (ml/L, g/L, EC, WP, SL, SG, °C, %) in their original form."
-    )
+    domain_note = ("Agricultural alerts page. Preserve technical terms like pesticide names, "
+                   "dosage numbers, and units (ml/L, g/L, EC, WP, SL, SG, °C, %) unchanged.")
     translations, cached = _translate_terms(terms, lang_name, domain_note, lang, _alerts_translation_cache)
-
-    print(f"[AlertsTranslate] {len(translations)} terms for {lang_name} ({'cache' if cached else 'fresh'})")
     return jsonify({"lang": lang, "lang_name": lang_name, "translations": translations, "cached": cached})
 
-# ─── Dashboard Translation ────────────────────────────────────────────────────
+
+# ─── Dashboard Translation ──────────────────────────────────────────────────
 _dashboard_translation_cache = {}
 
 @app.route("/api/translate-dashboard", methods=["POST"])
 def translate_dashboard():
     data = request.json or {}
     lang = data.get("lang", "en").strip().lower()
-
     if lang == "en":
         return jsonify({"lang": "en", "translations": {}, "cached": False})
-
     lang_name = LANG_NAMES.get(lang, "Hindi")
 
     terms = [
-        # UI Labels
         "Dashboard","Diagnose Crop","Market Prices","Alerts","Get My Location",
         "Location Found","Fetching weather...","Awaiting location...",
         "Current Weather Conditions","Live data from your location",
@@ -1837,114 +1504,55 @@ def translate_dashboard():
         "View Active Alerts","Weather & pest warnings for your area",
         "Empowering farmers with AI-driven precision agriculture",
         "Eco-Friendly","Chemical","Week",
-        # Seasons
         "Kharif (Monsoon)","Rabi (Winter)","Zaid (Summer)",
-        # Water levels
         "Very High","High","Medium","Low",
-        # Activity types
-        "preparation","sowing","irrigation","fertilizer","maintenance","pesticide","harvest",
-        # Calendar activities
-        "Soil preparation & ploughing","Seed treatment & sowing","First irrigation",
-        "Apply basal fertilizer (NPK)","Weeding & thinning","Apply Urea (top dressing)",
-        "Pest & disease inspection","Spray fungicide if required",
-        "Foliar spray micronutrients","Pre-harvest irrigation stop","Harvest preparation",
-        # Crop names
         "Rice","Wheat","Maize","Cotton","Tomato","Sugarcane","Soybean","Mustard",
-        # Crop descriptions
-        "Ideal for high humidity and warm conditions",
-        "Best suited for cool, dry winters",
-        "Versatile crop for warm humid weather",
-        "Thrives in hot dry spells with moderate rain",
-        "High value crop for moderate climates",
-        "Requires hot climate and heavy rainfall",
-        "Nitrogen-fixing legume for warm monsoon",
-        "Cool weather oil seed crop",
-        # Soil types
-        "Clay loam, alluvial","Well-drained loam","Sandy loam to clay loam",
-        "Black cotton soil","Sandy loam, rich organic matter","Deep loam, good drainage",
-        "Well-drained loam","Sandy loam, well-drained",
-        # Pest names
-        "Brown Plant Hopper","Leaf folder","Aphids","Yellow rust",
-        "Fall Armyworm","Stem borer","Bollworm","Whitefly",
-        # Pesticide section labels
         "Pest Control Plan","Crop","Timing",
     ]
-
-    domain_note = "Crop, pest, and field-activity names should be the common name farmers actually use, not a literal translation."
+    domain_note = "Crop, pest, and field-activity names should be the common name farmers use."
     translations, cached = _translate_terms(terms, lang_name, domain_note, lang, _dashboard_translation_cache)
-
-    print(f"[DashboardTranslate] {len(translations)} terms ready for {lang_name} ({'cache' if cached else 'fresh'})")
     return jsonify({"lang": lang, "lang_name": lang_name, "translations": translations, "cached": cached})
 
-# ─── Diagnose Page Translation (static UI text) ───────────────────────────────
 
+# ─── Diagnose Page Translation ──────────────────────────────────────────────
 _diagnose_translation_cache = {}
 
 @app.route("/api/translate-diagnose", methods=["POST"])
 def translate_diagnose():
     data = request.json or {}
     lang = data.get("lang", "en").strip().lower()
-
     if lang == "en":
         return jsonify({"lang": "en", "translations": {}, "cached": False})
-
     lang_name = LANG_NAMES.get(lang, "Hindi")
 
     terms = [
-        # Upload panel
-        "Drop your crop image here", "Supports JPG, PNG, WEBP — max 10 MB",
-        "Upload Photo", "Take Photo", "Image ready for analysis",
-        "Remove image", "Close camera", "Capture photo", "Analyze Crop",
-        "Analyzing…", "Try Again",
-        # Tips card
+        "Drop your crop image here","Supports JPG, PNG, WEBP — max 10 MB",
+        "Upload Photo","Take Photo","Image ready for analysis",
+        "Remove image","Close camera","Capture photo","Analyze Crop",
+        "Analyzing…","Try Again",
         "Photo Tips for Best Results",
         "Focus on the most visibly affected area",
         "Use natural daylight — avoid harsh shadows",
         "Include both healthy and affected parts if possible",
         "Keep the camera steady and close (30–50 cm)",
-        # Results placeholder
         "Upload a crop image to begin diagnosis",
         "Our AI will identify the disease and suggest eco-friendly treatments",
-        "Upload or capture image", "Click Analyze Crop", "Get instant AI diagnosis",
-        # Analyzing loader
+        "Upload or capture image","Click Analyze Crop","Get instant AI diagnosis",
         "AI is analyzing your crop…",
         "Identifying disease patterns and preparing remedies",
-        "Scanning image…", "Detecting patterns…", "Finding remedies…",
-        # Results content section headers
-        "Cause", "Recovery Timeline", "Eco-Friendly Remedies", "RECOMMENDED",
-        "Remedy Effectiveness Chart", "Chemical Treatment Options",
-        "Prevention Tips", "Confidence", "Severity", "effectiveness",
-        "AI-generated diagnosis for guidance only. Consult a local agronomist for critical crop decisions.",
-        "Unknown Disease",
-        # Error / failure states
-        "Analysis Failed", "Could not process the image.",
-        "Make sure your API key is set and the image is clear.",
-        "Diagnosis failed. Please try again.",
-        "Please upload or capture a crop image first.",
-        "Please drop a valid image file (JPG, PNG, WEBP).",
-        "Image too large. Max 10 MB allowed.",
-        "Camera access denied or not available.",
-        "Camera ready — position your crop in frame.",
-        "Diagnosis complete!",
-        # Severity levels (also used as data values from Groq)
-        "Mild", "Moderate", "Severe",
-        # How It Works section
-        "How It Works", "Capture or Upload",
-        "Take a clear photo of the affected crop leaf, stem, or fruit",
-        "AI Analysis",
-        "Our AI model analyzes visual patterns to identify diseases with high accuracy",
-        "Get Remedies",
-        "Receive eco-friendly and chemical treatment plans with dosage details instantly",
+        "Scanning image…","Detecting patterns…","Finding remedies…",
+        "Cause","Recovery Timeline","Eco-Friendly Remedies","RECOMMENDED",
+        "Remedy Effectiveness Chart","Chemical Treatment Options",
+        "Prevention Tips","Confidence","Severity","effectiveness",
+        "Mild","Moderate","Severe",
+        "How It Works","Capture or Upload","AI Analysis","Get Remedies",
     ]
-
-    domain_note = "This is UI copy and section labels for a crop-disease-diagnosis app. Keep tone simple and clear for farmers; keep numbers/units/file types (JPG, PNG, WEBP, MB, cm) unchanged."
+    domain_note = "UI copy for a crop-disease-diagnosis app. Keep file types and units unchanged."
     translations, cached = _translate_terms(terms, lang_name, domain_note, lang, _diagnose_translation_cache)
-
-    print(f"[DiagnoseTranslate] {len(translations)} terms ready for {lang_name} ({'cache' if cached else 'fresh'})")
     return jsonify({"lang": lang, "lang_name": lang_name, "translations": translations, "cached": cached})
 
 
-# ─── Dynamic Diagnosis Result Translation ─────────────────────────────────────
+# ─── Dynamic Diagnosis Result Translation (defined ONCE) ────────────────────
 _diagnosis_result_cache = {}
 
 @app.route("/api/translate-diagnosis-result", methods=["POST"])
@@ -1970,21 +1578,17 @@ def translate_diagnosis_result():
     for r in result.get("eco_remedies") or []:
         add(r.get("remedy")); add(r.get("method")); add(r.get("frequency"))
     for c in result.get("chemical_remedies") or []:
-        add(c.get("name")); add(c.get("interval"))
-        add(c.get("dose"))
+        add(c.get("name")); add(c.get("interval")); add(c.get("dose"))
     for tip in result.get("prevention") or []:
         add(tip)
 
     if not terms:
         return jsonify({"lang": lang, "translations": {}})
 
-    domain_note = ("This is an AI-generated crop disease diagnosis for a farmer. "
-                   "Translate naturally using terms a farmer would recognize. "
-                   "Keep chemical/brand names, numbers, and units (kg/ha, Rs, days, ml/L, g/ha, "
-                   "quintal, %, SL, EC, SC, WP, SG, NPK) unchanged.")
+    domain_note = ("AI-generated crop disease diagnosis for a farmer. "
+                   "Translate naturally. Keep chemical/brand names, numbers, and units unchanged.")
     cache_key = lang + "::" + "|".join(terms)
     translations, cached = _translate_terms(terms, lang_name, domain_note, cache_key, _diagnosis_result_cache)
-
     return jsonify({"lang": lang, "lang_name": lang_name, "translations": translations, "cached": cached})
 
 
