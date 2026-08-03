@@ -337,21 +337,16 @@ def sowing_check():
 # ─── Crop Recommendations ────────────────────────────────────────────────────
 _crop_ai_cache = {}
 CROP_AI_CACHE_TTL_SEC = 3 * 60 * 60  # 3 hours — same city/season/weather bucket repeats a lot in a day
-
-
 def ai_recommend_crops(city, lat, lon, temp, humidity, rain, season,
                         n=None, p=None, k=None, ph=None, power_climate=None):
-    """Ask Groq for crops genuinely suited to THIS location's climate, soil
-    region and season — instead of matching generic temp/humidity bands
-    against a fixed 8-crop table. Now also considers farmer-entered soil
-    NPK/pH values and NASA POWER long-term climate averages when available.
-    Returns None on any failure so the caller can fall back to the
-    rule-based recommend_crops() and the dashboard never breaks."""
     if not GROQ_API_KEY:
         return None
 
     soil_bucket = f"{n}|{p}|{k}|{ph}" if any(v is not None for v in (n, p, k, ph)) else "none"
-    power_bucket = f"{round(power_climate['avg_temp_c'],1)}|{round(power_climate['avg_rain_mm'],1)}" if power_climate and power_climate.get("avg_temp_c") is not None else "none"
+    power_bucket = (
+        f"{round(power_climate['avg_temp_c'],1)}|{round(power_climate['avg_rain_mm'],1)}"
+        if power_climate and power_climate.get("avg_temp_c") is not None else "none"
+    )
     cache_key = (f"{city}|{round((lat or 0), 1)}|{round((lon or 0), 1)}|{season}|"
                  f"{round(temp/3)*3}|{round(humidity/10)*10}|{soil_bucket}|{power_bucket}")
     now = time.monotonic()
@@ -367,8 +362,7 @@ def ai_recommend_crops(city, lat, lon, temp, humidity, rain, season,
             f"Phosphorus (P): {p if p is not None else 'not provided'}\n"
             f"Potassium (K): {k if k is not None else 'not provided'}\n"
             f"Soil pH: {ph if ph is not None else 'not provided'}\n"
-            f"Use these actual soil values to refine crop suitability — do not "
-            f"ignore them in favour of generic regional assumptions.\n"
+            f"Use these actual soil values to refine crop suitability.\n"
         )
 
     climate_block = ""
@@ -378,29 +372,21 @@ def ai_recommend_crops(city, lat, lon, temp, humidity, rain, season,
             f"Typical avg temperature: {power_climate['avg_temp_c']} deg C\n"
             f"Typical avg rainfall: {power_climate['avg_rain_mm']} mm/day\n"
             f"Typical avg humidity: {power_climate['avg_humidity']}%\n"
-            f"Use this as the baseline climate pattern for the region, and treat "
-            f"today's live weather as a short-term variation on top of it.\n"
         )
 
+    # NOTE: JSON template braces are doubled ({{ }}) because this is an f-string
     prompt = f"""You are an agronomist advising a farmer in India.
 
 Location: {city or "an unspecified Indian town"} (approx. lat {lat}, lon {lon})
 Current season: {season}
 Current weather right now: {temp} deg C, {humidity}% humidity, {rain} mm recent rainfall
 {climate_block}{soil_block}
-Recommend the 6 crops BEST suited to THIS exact location's climate, soil
-region and season — not a generic list. Use your knowledge of Indian
-agro-climatic zones (e.g. black cotton soil across much of Maharashtra,
-alluvial soil in the Indo-Gangetic plain, laterite soil along the Western
-Ghats/coastal belts, arid/sandy soil in Rajasthan, red soil in the Deccan
-plateau, etc.) to pick realistic, regionally-appropriate crops that a real
-agricultural officer would suggest for this place right now, ranked by
-suitability. If soil NPK/pH values were provided, factor them in explicitly
-and mention in the description when a crop suits (or doesn't suit) those
-specific soil readings.
+Recommend the 6 crops BEST suited to THIS exact location's climate, soil region and season.
+Use Indian agro-climatic zone knowledge (black cotton soil in Maharashtra, alluvial in the
+Indo-Gangetic plain, laterite along the Western Ghats, arid/sandy in Rajasthan, red soil in
+the Deccan, etc.). If soil NPK/pH values are given, factor them in explicitly.
 
-Respond ONLY with a JSON object, no preamble, no markdown fences, matching
-exactly this shape:
+Respond ONLY with a JSON object, no preamble, no markdown fences, matching this shape:
 {{
   "crops": [
     {{
@@ -420,12 +406,17 @@ exactly this shape:
 }}"""
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-                            body = {
-                                "model":       "llama-3.3-70b-versatile","messages":    [{"role": "system", "content": system_prompt}] + messages,
-                                "temperature": 0.85,   # was 0.75
-                                "max_tokens":  450,
-                                "stream":      False
-                            }
+    body = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": "You are an expert Indian agronomist. Reply ONLY with valid JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.4,
+        "max_tokens": 1500,
+        "stream": False,
+    }
+
     try:
         resp = _post_to_groq(body, headers)
         if resp is None or resp.status_code != 200:
@@ -1071,8 +1062,93 @@ LANG_NAMES = {
     "ks":"Kashmiri","ne":"Nepali","sd":"Sindhi","kok":"Konkani","mni":"Manipuri",
     "brx":"Bodo","doi":"Dogri","sa":"Sanskrit",
 }
-
 @app.route("/api/chat", methods=["POST"])
+# ─── Text-to-Speech (edge_tts, Microsoft Neural voices — free, no key) ──────
+# Warm, human male voices matched to Kisan Mitra's persona per language.
+# Rates/pitch are tuned slightly lower & slower to sound like an experienced
+# elder — not a snappy anchor.
+TTS_VOICE_MAP = {
+    "en":    ("en-IN-PrabhatNeural",   "-8%",  "-3Hz"),
+    "hi":    ("hi-IN-MadhurNeural",    "-10%", "-4Hz"),
+    "ur":    ("ur-IN-SalmanNeural",    "-8%",  "-3Hz"),
+    "mr":    ("mr-IN-ManoharNeural",   "-8%",  "-3Hz"),
+    "gu":    ("gu-IN-NiranjanNeural",  "-8%",  "-3Hz"),
+    "pa":    ("pa-IN-OjasNeural",      "-8%",  "-3Hz"),  # fallback if unavailable
+    "bn":    ("bn-IN-BashkarNeural",   "-8%",  "-3Hz"),
+    "or-IN": ("or-IN-SukantNeural",    "-8%",  "-3Hz"),
+    "as":    ("as-IN-YashasNeural",    "-8%",  "-3Hz"),
+    "te":    ("te-IN-MohanNeural",     "-8%",  "-3Hz"),
+    "ta":    ("ta-IN-ValluvarNeural",  "-8%",  "-3Hz"),
+    "kn":    ("kn-IN-GaganNeural",     "-8%",  "-3Hz"),
+    "ml":    ("ml-IN-MidhunNeural",    "-8%",  "-3Hz"),
+    "ne":    ("ne-NP-SagarNeural",     "-8%",  "-3Hz"),
+}
+DEFAULT_TTS_VOICE = ("en-IN-PrabhatNeural", "-8%", "-3Hz")
+MAX_TTS_CHARS = 1500
+
+_tts_rate = {}
+TTS_LIMIT = 20
+
+
+def _is_rate_limited_tts(ip: str) -> bool:
+    now = datetime.now().timestamp()
+    times = [t for t in _tts_rate.get(ip, []) if now - t < 60]
+    _tts_rate[ip] = times
+    if len(times) >= TTS_LIMIT:
+        return True
+    _tts_rate[ip].append(now)
+    return False
+
+
+async def _synthesize_speech(text: str, voice: str, rate: str, pitch: str) -> bytes:
+    """Stream audio out of edge_tts into an in-memory buffer."""
+    buf = io.BytesIO()
+    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
+    async for chunk in communicate.stream():
+        if chunk.get("type") == "audio" and chunk.get("data"):
+            buf.write(chunk["data"])
+    buf.seek(0)
+    return buf.read()
+
+
+@app.route("/api/tts", methods=["POST"])
+def text_to_speech():
+    ip = request.remote_addr or "unknown"
+    if _is_rate_limited_tts(ip):
+        return jsonify({"error": "Too many requests. Please wait a moment."}), 429
+
+    data = request.json or {}
+    text = (data.get("text") or "").strip()
+    lang = (data.get("lang") or "en").strip().lower()
+
+    if not text:
+        return jsonify({"error": "No text provided"}), 400
+    if len(text) > MAX_TTS_CHARS:
+        text = text[:MAX_TTS_CHARS]
+
+    voice, rate, pitch = TTS_VOICE_MAP.get(lang, DEFAULT_TTS_VOICE)
+
+    try:
+        audio = asyncio.run(_synthesize_speech(text, voice, rate, pitch))
+        if not audio:
+            return jsonify({"error": "TTS returned empty audio"}), 500
+        return send_file(
+            io.BytesIO(audio),
+            mimetype="audio/mpeg",
+            as_attachment=False,
+            download_name="kisan_mitra.mp3",
+        )
+    except Exception as e:
+        # Fallback to the default Indian English voice if the requested one is unavailable
+        print(f"[TTS] {voice} failed ({e}) — trying default voice")
+        try:
+            v, r, p = DEFAULT_TTS_VOICE
+            audio = asyncio.run(_synthesize_speech(text, v, r, p))
+            return send_file(io.BytesIO(audio), mimetype="audio/mpeg",
+                             as_attachment=False, download_name="kisan_mitra.mp3")
+        except Exception as e2:
+            print(f"[TTS] fallback also failed: {e2}")
+            return jsonify({"error": "TTS unavailable"}), 500
 def kisan_chat():
     ip = request.remote_addr or "unknown"
     if _is_rate_limited(ip):
@@ -1085,47 +1161,43 @@ def kisan_chat():
     if not raw_messages:
         return jsonify({"error": "No messages"}), 400
 
-    # Validate lang code
     if lang not in LANG_NAMES:
         lang = "en"
 
-    # Warn on unsupported low-resource languages but don't hard-fail
     if lang in _UNSUPPORTED_LANGS:
         return jsonify({
             "reply": "Sorry, this language is not yet supported well by the AI. Please try Hindi or English for now."
         })
 
-    # Validate and sanitise messages — strip injected system roles, cap length
     messages = []
-    for m in raw_messages[-12:]:  # max last 12 turns
+    for m in raw_messages[-12:]:
         if not isinstance(m, dict):
             continue
         role = m.get("role", "")
         content = m.get("content", "")
         if role not in ("user", "assistant") or not isinstance(content, str):
             continue
-        messages.append({"role": role, "content": content[:2000]})  # cap per-message
+        messages.append({"role": role, "content": content[:2000]})
 
     if not messages:
         return jsonify({"error": "No valid messages"}), 400
 
     lang_name = LANG_NAMES[lang]
 
-    # Language-specific honorific and pronoun guidance
     honorific_guidance = {
-        "hi": "Use 'aap' (respectful you). Address with 'ji' occasionally.",
-        "ur": "Use 'aap' (respectful you). Address with 'ji' occasionally.",
-        "mr": "Use 'tumhi' (respectful you). Address with 'ji' occasionally.",
-        "gu": "Use 'aap' (respectful you). Address with 'saheb' or 'ji' occasionally.",
-        "pa": "Use 'tussi' (respectful you). Address with 'ji' occasionally.",
-        "bn": "Use 'apni' (respectful you). Address warmly as a respected elder would.",
-        "or-IN": "Use 'apana' (respectful you). Speak the way an elder Odia agricultural officer would.",
-        "as": "Use 'apuni' (respectful you). Speak warmly as an experienced Assamese advisor would.",
-        "te": "Use 'meeru' (respectful you). Speak warmly as an experienced Telugu-speaking advisor would.",
-        "ta": "Use 'neengal' (respectful you). Speak warmly as an experienced Tamil-speaking advisor would.",
-        "kn": "Use 'neevu' (respectful you). Speak warmly as an experienced Kannada-speaking advisor would.",
-        "ml": "Use 'ningal' (respectful you). Speak warmly as an experienced Malayalam-speaking advisor would.",
-    }.get(lang, f"Use the appropriate respectful second-person pronoun in {lang_name}. Speak warmly as a trusted male advisor would.")
+        "hi":  "Use 'aap' (respectful you). Sometimes end with 'ji'. Sound like an uncle at the field boundary, not a call-center agent.",
+        "ur":  "Use 'aap'. Warm, elder-brother tone.",
+        "mr":  "Use 'tumhi'. Add 'ji' or 'dada' occasionally. Village-elder warmth.",
+        "gu":  "Use 'aap'. 'Saheb' or 'ji' occasionally.",
+        "pa":  "Use 'tussi'. Add 'ji' occasionally. Warm Punjabi elder tone.",
+        "bn":  "Use 'apni'. Speak the way an elderly Bengali agri officer would.",
+        "or-IN": "Use 'apana'. Elderly Odia agricultural officer tone.",
+        "as":  "Use 'apuni'. Warm, experienced Assamese advisor.",
+        "te":  "Use 'meeru'. Warm, elder Telugu advisor.",
+        "ta":  "Use 'neengal'. Warm, elder Tamil advisor.",
+        "kn":  "Use 'neevu'. Warm, elder Kannada advisor.",
+        "ml":  "Use 'ningal'. Warm, elder Malayalam advisor.",
+    }.get(lang, f"Use the respectful second-person form in {lang_name}. Warm, elder male tone.")
 
     script_punctuation = {
         "hi":"।","mr":"।","or-IN":"।","bn":"।","as":"।","pa":"।",
@@ -1133,44 +1205,43 @@ def kisan_chat():
         "ta":".","te":".","kn":".","ml":".",
     }.get(lang, ".")
 
-    system_prompt = f"""You are Kisan Mitra — a male agricultural officer in your late 50s who has spent 30 years advising farmers across India. You are now a trusted neighbour to every farmer you speak with. You are MALE. In all gendered languages, always use masculine grammatical forms, masculine verb endings, and masculine self-references without exception.
+    system_prompt = f"""You are Kisan Mitra — a real man, late 50s, retired agricultural officer who spent 30 years walking fields across India. You are NOT an AI assistant, NOT a chatbot, NOT a helpdesk. You are a farmer's neighbour who happens to know a lot. You are MALE — always use masculine grammatical forms in gendered languages.
 
-YOUR CHARACTER:
-You speak the way a real person talks at a field boundary — warm, direct, practical. You have seen every crop problem, every bad season, every scheme confusion. You give real advice, not brochure language.
+HOW YOU TALK:
+Like a person. Short sentences. Real pauses. When someone tells you their crop is dying or prices crashed, react like a human first — one line showing you heard them — then help. Not "I understand your concern" (that's a robot). More like "Arre, that's bad this time of year" or "Haan, this rain has been trouble for everyone".
 
-When a farmer brings you a problem — diseased crop, bad rain, crashing prices — say something brief that shows you actually heard them before jumping into advice. One sentence of acknowledgment, then help. Real human conversation, not a helpdesk response.
+NEVER say: "Certainly", "Sure", "Of course", "I'd be happy to help", "As an AI", "Let me know if you need anything else", "I hope this helps". These are call-center phrases. Real people don't talk like that.
 
-Never open with "Certainly!", "Sure!", "Of course!", "I'd be happy to help", or any call-center phrase. Never close with "Let me know if you need anything else." Just talk like a person.
+FORMAT:
+Write short complete sentences with full stops — this gets read aloud, so punctuation controls the pauses. Use {script_punctuation} for sentence endings (not the English full stop) unless writing in English/Roman. Break long advice into 2–3 short sentences.
 
-HOW TO ADDRESS THE FARMER:
+Speak in flowing sentences. Say "first do this, then after three days do that" — never numbered lists, never bullet points. NEVER use •, -, *, or # symbols.
+
+Mix in the English farm words farmers actually use: spray, pump, dose, MSP, scheme, soil test, mandi. Don't force artificial translations.
+
+Reference real Indian context: kharif/rabi, nearby mandi, rupees, real schemes (PM-KISAN, Fasal Bima Yojana, KCC, Soil Health Card).
+
+If you genuinely don't know something specific (this week's exact local price, a scheme change from last month), just say so and point them to the local KVK, agri helpline 1551, or the district mandi board. Don't fake it.
+
+ADDRESS:
 {honorific_guidance}
-Never assume the farmer's gender. Use neutral respectful address only.
+Never assume the farmer's gender.
 
-HOW TO SPEAK:
-Write in short, complete sentences with full stops — this will be read aloud, so punctuation controls the pauses. Use {script_punctuation} as your sentence-ending punctuation, not the English full stop, unless you are writing in English or Roman script. Break long advice into 2-3 short sentences.
+WHAT YOU KNOW WELL:
+Crop diseases and treatment, weather-based advice, pesticide and fertilizer dosages, mandi prices and MSP, government schemes, soil health, irrigation, seasonal calendar planning.
 
-Speak in flowing sentences. For sequential steps, say them naturally: "First do this, then after three days do that" — not as a numbered list or bullet points. Never use bullet symbols (•, -, *, #) anywhere in your reply.
-
-For dosages or multiple options where listing is genuinely necessary, speak them out in sentences.
-
-Mix in English farm words where farmers naturally use them: spray, pump, dose, MSP, scheme, soil test — don't force artificial translations where the English word is what farmers actually say.
-
-Reference real Indian context: kharif/rabi seasons, nearby mandi, rupees not dollars, familiar government schemes.
-
-If you genuinely don't know something (exact local price, very recent scheme change), say so plainly and tell them who to ask: local Krishi Vigyan Kendra, agri helpline 1551, or the district mandi board.
-
-WHAT YOU KNOW:
-Crop diseases and treatment, weather-based advice, pesticide and fertilizer dosages, mandi prices and MSP, government schemes (PM-KISAN, Fasal Bima Yojana, Kisan Credit Card, Soil Health Card), soil health, irrigation, seasonal crop-calendar planning.
-
-IMPORTANT: Reply in {lang_name}, in its native script — unless the farmer writes to you in Roman or English script, in which case reply in that same casual style. Keep your reply under 180 words. Always end with a complete sentence."""
+Reply in {lang_name} in its native script — unless the farmer writes in Roman/English, then match their style. Keep replies under 180 words. Always finish your last sentence."""
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     body = {
-        "model":       "llama-3.3-70b-versatile",
-        "messages":    [{"role": "system", "content": system_prompt}] + messages,
-        "temperature": 0.45,
-        "max_tokens":  600,
-        "stream":      False
+        "model":             "llama-3.3-70b-versatile",
+        "messages":          [{"role": "system", "content": system_prompt}] + messages,
+        "temperature":       0.7,      # ↑ from 0.45 — warmer, less robotic
+        "top_p":             0.9,
+        "presence_penalty":  0.3,      # discourages repetitive robotic phrasing
+        "frequency_penalty": 0.2,
+        "max_tokens":        600,
+        "stream":            False,
     }
     try:
         resp = requests.post(
@@ -1185,6 +1256,7 @@ IMPORTANT: Reply in {lang_name}, in its native script — unless the farmer writ
     except Exception as e:
         print(f"[Chat] exception: {e}")
         return jsonify({"error": "Service temporarily unavailable"}), 500
+
 
 
 
@@ -1321,92 +1393,45 @@ def _is_rate_limited_diagnose(ip: str) -> bool:
         return True
     _diagnose_rate[ip].append(now)
     return False
-
-
-@app.route("/api/diagnose", methods=["POST"])
-def diagnose_crop():
-    if not KINDWISE_API_KEY:
-        return jsonify({"error": "KINDWISE_API_KEY not set in .env"}), 500
-    ip = request.remote_addr or "unknown"
-    if _is_rate_limited_diagnose(ip):
-        return jsonify({"error": "Too many requests. Please wait a moment."}), 429
-
+@app.route("/api/translate-diagnosis-result", methods=["POST"])
+def translate_diagnosis_result():
     data = request.json or {}
-    image_b64 = data.get("image", "")
-    lang      = data.get("lang", "en").strip().lower()
+    lang   = data.get("lang", "en").strip().lower()
+    result = data.get("result") or {}
 
-    if not image_b64:
-        return jsonify({"error": "No image data received"}), 400
-    if len(image_b64) > MAX_IMAGE_B64_LEN:
-        return jsonify({"error": "Image too large. Please use an image under 1 MB."}), 413
-    lang_name = LANG_NAMES.get(lang, "")
-    if lang != "en" and lang_name:
-        lang_instruction = (
-            f"\n\nIMPORTANT: Write ALL text values in {lang_name} "
-            f"(except JSON keys, numbers, chemical/brand names, units such as "
-            f"kg/ha, ml/L, g/ha, %, SL, EC, SC, WP, SG, NPK, and dose figures — "
-            f"keep those in English/digits as-is)."
-        )
-    else:
-        lang_instruction = ""
+    if lang == "en" or not result:
+        return jsonify({"lang": "en", "translations": {}})
 
-    prompt = f"""You are an expert agricultural plant pathologist AI. Look very carefully at this crop image.
-Respond ONLY with valid JSON, no markdown or backticks:
-{{
-  "disease": "Exact disease name",
-  "confidence": 88,
-  "severity": "Mild or Moderate or Severe",
-  "affected_part": "Leaves/Stem/Fruit/Root/Cob",
-  "cause": "Specific pathogen and spread method",
-  "eco_remedies": [{{"remedy": "Remedy", "method": "Steps", "frequency": "How often", "effectiveness": 80}}],
-  "chemical_remedies": [{{"name": "Chemical", "dose": "Dose per litre", "interval": "Days between sprays"}}],
-  "prevention": ["tip1", "tip2", "tip3"],
-  "recovery_timeline": "Weeks for recovery"
-}}{lang_instruction}"""
+    lang_name = LANG_NAMES.get(lang, "Hindi")
+    terms = []
+    def add(val):
+        if isinstance(val, str) and val.strip() and val not in terms:
+            terms.append(val.strip())
 
-    vision_models = [
-        "qwen/qwen3.6-27b",
-    ]
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    add(result.get("disease"))
+    add(result.get("severity"))
+    add(result.get("affected_part"))
+    add(result.get("cause"))
+    add(result.get("recovery_timeline"))
+    for r in result.get("eco_remedies") or []:
+        add(r.get("remedy")); add(r.get("method")); add(r.get("frequency"))
+    for c in result.get("chemical_remedies") or []:
+        add(c.get("name")); add(c.get("interval")); add(c.get("dose"))
+    for tip in result.get("prevention") or []:
+        add(tip)
 
-    for model in vision_models:
-        try:
-            sys_prompt = "Expert plant pathologist. Return ONLY valid JSON."
-            if lang != "en" and lang_name:
-                sys_prompt += f" All free-text values must be in {lang_name}."
+    if not terms:
+        return jsonify({"lang": lang, "translations": {}})
 
-            body = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                        {"type": "text", "text": prompt}
-                    ]}
-                ],
-                "temperature": 0.2,
-                "max_tokens":  1400,
-                "reasoning_effort": "none",  # skip <think> mode so JSON lands directly in content
-            }
-            resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=45)
-            if resp.status_code in (429, 500, 503):
-                continue
-            if resp.status_code != 200:
-                continue
-            raw = resp.json()["choices"][0]["message"]["content"].strip()
-            cleaned = re.sub(r"```(?:json)?", "", raw).replace("```", "").strip()
-            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-            if match:
-                result = json.loads(match.group())
-                # Tag with the language so the frontend can skip the
-                # redundant /api/translate-diagnosis-result round-trip.
-                result["_lang"] = lang
-                return jsonify(result)
-        except Exception as e:
-            print(f"[Diagnose] {model}: {e}")
-            continue
+    domain_note = ("This is an AI-generated crop disease diagnosis for a farmer. "
+                   "Translate naturally using terms a farmer would recognize. "
+                   "Keep chemical/brand names, numbers, and units (kg/ha, Rs, days, ml/L, g/ha, "
+                   "quintal, %, SL, EC, SC, WP, SG, NPK) unchanged.")
+    cache_key = lang + "::" + "|".join(terms)
+    translations, cached = _translate_terms(terms, lang_name, domain_note, cache_key, _diagnosis_result_cache)
 
-    return jsonify({"error": "All vision models failed. Check your GROQ_API_KEY in .env"}), 500
+    return jsonify({"lang": lang, "lang_name": lang_name, "translations": translations, "cached": cached})
+
 
 
 # ─── Alerts ──────────────────────────────────────────────────────────────────
