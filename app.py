@@ -420,15 +420,12 @@ exactly this shape:
 }}"""
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-                                body = {
-        "model":       "llama-3.3-70b-versatile",
-        "messages":    [{"role": "system", "content": system_prompt}] + messages,
-        "temperature": 0.85,   # was 0.75
-        "max_tokens":  450,
-        "stream":      False
-    }
-
-
+                            body = {
+                                "model":       "llama-3.3-70b-versatile","messages":    [{"role": "system", "content": system_prompt}] + messages,
+                                "temperature": 0.85,   # was 0.75
+                                "max_tokens":  450,
+                                "stream":      False
+                            }
     try:
         resp = _post_to_groq(body, headers)
         if resp is None or resp.status_code != 200:
