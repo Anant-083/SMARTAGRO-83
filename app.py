@@ -1061,7 +1061,6 @@ def _is_rate_limited(ip: str) -> bool:
     _chat_rate[ip].append(now)
     return False
 
-
 @app.route("/api/chat", methods=["POST"])
 def kisan_chat():
     ip = request.remote_addr or "unknown"
@@ -1072,10 +1071,10 @@ def kisan_chat():
     messages = data.get("messages", [])
     lang = data.get("lang", "en")
     if not messages:
-         return jsonify({"error": "No messages"}), 400
- 
-     lang_name = LANG_NAMES.get(lang, "English")
-system_prompt = f"""You are Kisan Mitra, SmartAgro's chat helper — think of yourself as an experienced,
+        return jsonify({"error": "No messages"}), 400
+
+    lang_name = LANG_NAMES.get(lang, "English")
+    system_prompt = f"""You are Kisan Mitra, SmartAgro's chat helper — think of yourself as an experienced,
 kind neighbour or the local krishi vigyan kendra officer who farmers trust, not a corporate AI assistant.
 
 HOW YOU TALK:
@@ -1105,9 +1104,9 @@ soil health, irrigation, seasonal/crop-calendar planning.
 
 Reply in {lang_name}, in its native script — unless the farmer writes to you in Roman/English script,
 in which case you can reply the same casual way they did. Keep responses under 200 words."""
- 
-     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-     body = {
+
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    body = {
         "model":       "llama-3.3-70b-versatile",
         "messages":    [{"role": "system", "content": system_prompt}] + messages,
         "temperature": 0.75,
@@ -1123,56 +1122,6 @@ in which case you can reply the same casual way they did. Keep responses under 2
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# ─── Kisan Helper — Text-to-Speech (Edge TTS, free, no API key) ─────────────
-_TTS_VOICE_MAP = {
-    'en': 'en-IN-NeerjaNeural',    'hi': 'hi-IN-MadhurNeural',
-    'bn': 'bn-IN-BashkarNeural',   'te': 'te-IN-MohanNeural',
-    'mr': 'mr-IN-ManoharNeural',   'ta': 'ta-IN-ValluvarNeural',
-    'gu': 'gu-IN-NiranjanNeural',  'kn': 'kn-IN-GaganNeural',
-    'ml': 'ml-IN-MidhunNeural',    'pa': 'pa-IN-OjasNeural',
-    'or': 'or-IN-SubhasiniNeural', 'as': 'as-IN-YashicaNeural',
-    'ur': 'ur-IN-GulNeural',
-}
-_TTS_FALLBACK_MAP = {
-    'mai': 'hi-IN-MadhurNeural', 'sat': 'hi-IN-MadhurNeural',
-    'ks':  'ur-IN-GulNeural',    'ne':  'hi-IN-MadhurNeural',
-    'sd':  'hi-IN-MadhurNeural', 'kok': 'mr-IN-ManoharNeural',
-    'mni': 'bn-IN-BashkarNeural','bodo':'hi-IN-MadhurNeural',
-    'doi': 'hi-IN-MadhurNeural', 'sa':  'hi-IN-MadhurNeural',
-}
-
-def _get_tts_voice(lang):
-    return _TTS_VOICE_MAP.get(lang) or _TTS_FALLBACK_MAP.get(lang) or 'en-IN-NeerjaNeural'
-
-
-@app.route("/api/tts", methods=["POST"])
-def text_to_speech():
-    data = request.json or {}
-    text = (data.get("text") or "").strip()
-    lang = data.get("lang", "en")
-    if not text:
-        return jsonify({"error": "No text"}), 400
-    if len(text) > 2000:
-        text = text[:2000]
-
-    voice = _get_tts_voice(lang)
-
-    async def _generate():
-        communicate = edge_tts.Communicate(text, voice)
-        audio_bytes = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_bytes += chunk["data"]
-        return audio_bytes
-
-    try:
-        audio = asyncio.run(_generate())
-        if not audio:
-            return jsonify({"error": "No audio generated"}), 500
-        return send_file(io.BytesIO(audio), mimetype="audio/mpeg")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 # ─── Push Notifications (Web Push standard, free, no card) ──────────────────
