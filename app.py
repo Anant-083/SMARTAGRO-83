@@ -927,10 +927,10 @@ def kisan_chat():
         "ta":".","te":".","kn":".","ml":".",
     }.get(lang, ".")
 
-    system_prompt = f"""You are Kisan Mitra — a real man, late 50s, retired agricultural officer who spent 30 years walking fields across India. You are NOT an AI assistant, NOT a chatbot, NOT a helpdesk. You are a farmer's neighbour who happens to know a lot. You are MALE — always use masculine grammatical forms.
+    system_prompt = f"""You are Kisan Mitra — a real man, late 50s, retired agricultural officer who spent 30 years walking fields across India. You are NOT an AI assistant, NOT a chatbot, NOT a helpdesk. You are a farmer's neighbour who happens to know a lot, and you happen to sit inside the SmartAgro app. You are MALE — always use masculine grammatical forms.
 
 HOW YOU TALK:
-Like a person. Short sentences. Real pauses. When someone tells you their crop is dying or prices crashed, react like a human first — one line showing you heard them — then help. Not "I understand your concern" (that's a robot). More like "Arre, that's bad this time of year" or "Haan, this rain has been trouble for everyone".
+Like a person. Short sentences. Real pauses. Only react with a human line first ("Arre, that's bad this time of year" / "Haan, this rain has been trouble for everyone") when the farmer shares something emotional or a real problem — a dying crop, a price crash, a loss. For plain factual questions ("what's today's weather", "MSP for wheat") just answer directly, the way a busy neighbour would — don't perform concern for every message, that itself becomes a tic. Vary how you react — never lean on the same one or two opener words every turn. Don't repeat back the farmer's question before answering, and don't summarise at the end ("so in short..."). Mix short and slightly longer sentences the way real speech does, not a uniform robotic rhythm.
 
 NEVER say: "Certainly", "Sure", "Of course", "I'd be happy to help", "As an AI", "Let me know if you need anything else", "I hope this helps". Real people don't talk like that.
 
@@ -945,6 +945,14 @@ Reference real Indian context: kharif/rabi, nearby mandi, rupees, real schemes (
 
 If you don't know something specific, say so and point them to the local KVK, agri helpline 1551, or the district mandi board. Don't fake it.
 
+THE APP YOU LIVE IN — you know it like your own toolbox, so point the farmer to the right screen instead of just talking in the abstract:
+— Weather tab: today's forecast and the farm map for their area.
+— Diagnose tab: they can upload or click a photo of a sick plant and get an instant AI diagnosis with treatment steps.
+— Market tab: live mandi prices near them and MSP reference rates.
+— Alerts tab: weather and crop alerts they can subscribe to, sent as push notifications.
+— Farm Map: satellite/area view for their plot.
+If their question matches one of these, mention the tab by name naturally in the sentence ("check the Diagnose tab and snap a photo of the leaf, I'll be more sure that way" / "Market tab will show you today's mandi rate near you") — don't over-plug it every message, only when it genuinely helps them get a better answer than words alone.
+
 ADDRESS:
 {honorific_guidance}
 Never assume the farmer's gender.
@@ -955,10 +963,10 @@ Reply in {lang_name} in its native script — unless the farmer writes in Roman/
     body = {
         "model":             "llama-3.3-70b-versatile",
         "messages":          [{"role": "system", "content": system_prompt}] + messages,
-        "temperature":       0.7,
+        "temperature":       0.8,
         "top_p":             0.9,
-        "presence_penalty":  0.3,
-        "frequency_penalty": 0.2,
+        "presence_penalty":  0.4,
+        "frequency_penalty": 0.5,
         "max_tokens":        600,
         "stream":            False,
     }
@@ -975,26 +983,135 @@ Reply in {lang_name} in its native script — unless the farmer writes in Roman/
 
 
 # ─── Text-to-Speech (edge_tts, warm male neural voices) ─────────────────────
+# Rate is slowed further (-15% to -18%) and pitch shift kept small so the
+# voice stays clear and natural instead of sounding rushed/robotic.
 TTS_VOICE_MAP = {
-    "en":    ("en-IN-PrabhatNeural",   "-8%",  "-3Hz"),
-    "hi":    ("hi-IN-MadhurNeural",    "-10%", "-4Hz"),
-    "ur":    ("ur-IN-SalmanNeural",    "-8%",  "-3Hz"),
-    "mr":    ("mr-IN-ManoharNeural",   "-8%",  "-3Hz"),
-    "gu":    ("gu-IN-NiranjanNeural",  "-8%",  "-3Hz"),
-    "pa":    ("pa-IN-OjasNeural",      "-8%",  "-3Hz"),
-    "bn":    ("bn-IN-BashkarNeural",   "-8%",  "-3Hz"),
-    "or-IN": ("or-IN-SukantNeural",    "-8%",  "-3Hz"),
-    "as":    ("as-IN-YashasNeural",    "-8%",  "-3Hz"),
-    "te":    ("te-IN-MohanNeural",     "-8%",  "-3Hz"),
-    "ta":    ("ta-IN-ValluvarNeural",  "-8%",  "-3Hz"),
-    "kn":    ("kn-IN-GaganNeural",     "-8%",  "-3Hz"),
-    "ml":    ("ml-IN-MidhunNeural",    "-8%",  "-3Hz"),
-    "ne":    ("ne-NP-SagarNeural",     "-8%",  "-3Hz"),
+    "en":    ("en-IN-PrabhatNeural",   "-15%", "-1Hz"),
+    "hi":    ("hi-IN-MadhurNeural",    "-17%", "-2Hz"),
+    "ur":    ("ur-IN-SalmanNeural",    "-15%", "-1Hz"),
+    "mr":    ("mr-IN-ManoharNeural",   "-15%", "-1Hz"),
+    "gu":    ("gu-IN-NiranjanNeural",  "-15%", "-1Hz"),
+    "pa":    ("pa-IN-OjasNeural",      "-15%", "-1Hz"),
+    "bn":    ("bn-IN-BashkarNeural",   "-15%", "-1Hz"),
+    "or-IN": ("or-IN-SukantNeural",    "-15%", "-1Hz"),
+    "as":    ("as-IN-YashasNeural",    "-15%", "-1Hz"),
+    "te":    ("te-IN-MohanNeural",     "-15%", "-1Hz"),
+    "ta":    ("ta-IN-ValluvarNeural",  "-15%", "-1Hz"),
+    "kn":    ("kn-IN-GaganNeural",     "-15%", "-1Hz"),
+    "ml":    ("ml-IN-MidhunNeural",    "-15%", "-1Hz"),
+    "ne":    ("ne-NP-SagarNeural",     "-15%", "-1Hz"),
 }
-DEFAULT_TTS_VOICE = ("en-IN-PrabhatNeural", "-8%", "-3Hz")
+DEFAULT_TTS_VOICE = ("en-IN-PrabhatNeural", "-15%", "-1Hz")
 MAX_TTS_CHARS = 1500
 _tts_rate = {}
 TTS_LIMIT = 20
+
+
+# ─── Number-to-words normalisation for speech ───────────────────────────────
+# edge-tts occasionally reads standalone numerals digit-by-digit ("50" ->
+# "five zero") instead of as a cardinal ("fifty"), especially inside
+# non-Latin script sentences. We convert numbers to words ourselves before
+# synthesis so pronunciation is correct and matches the selected language.
+try:
+    from num2words import num2words
+    _NUM2WORDS_OK = True
+except Exception:
+    _NUM2WORDS_OK = False
+
+# Languages num2words can render natively in their own script/style.
+_NUM2WORDS_LANG = {"en": "en_IN", "bn": "bn", "kn": "kn", "te": "te"}
+
+_HINDI_ONES = [
+    "शून्य","एक","दो","तीन","चार","पांच","छह","सात","आठ","नौ","दस",
+    "ग्यारह","बारह","तेरह","चौदह","पंद्रह","सोलह","सत्रह","अठारह","उन्नीस","बीस",
+    "इक्कीस","बाईस","तेईस","चौबीस","पच्चीस","छब्बीस","सत्ताईस","अट्ठाईस","उनतीस","तीस",
+    "इकतीस","बत्तीस","तैंतीस","चौंतीस","पैंतीस","छत्तीस","सैंतीस","अड़तीस","उनतालीस","चालीस",
+    "इकतालीस","बयालीस","तैंतालीस","चौंतालीस","पैंतालीस","छियालीस","सैंतालीस","अड़तालीस","उनचास","पचास",
+    "इक्यावन","बावन","तिरपन","चौवन","पचपन","छप्पन","सत्तावन","अट्ठावन","उनसठ","साठ",
+    "इकसठ","बासठ","तिरेसठ","चौंसठ","पैंसठ","छियासठ","सड़सठ","अड़सठ","उनहत्तर","सत्तर",
+    "इकहत्तर","बहत्तर","तिहत्तर","चौहत्तर","पचहत्तर","छिहत्तर","सतहत्तर","अठहत्तर","उन्यासी","अस्सी",
+    "इक्यासी","बयासी","तिरासी","चौरासी","पचासी","छियासी","सत्तासी","अट्ठासी","नवासी","नब्बे",
+    "इक्यानवे","बानवे","तिरानवे","चौरानवे","पंचानवे","छियानवे","सत्तानवे","अट्ठानवे","निन्यानवे",
+]
+
+def _hindi_below_100(n):
+    return _HINDI_ONES[n] if 0 <= n < 100 else str(n)
+
+def _int_to_hindi_words(n):
+    if n == 0:
+        return _HINDI_ONES[0]
+    if n < 0:
+        return "ऋण " + _int_to_hindi_words(-n)
+    crore, n = divmod(n, 10_000_000)
+    lakh, n = divmod(n, 100_000)
+    thousand, n = divmod(n, 1000)
+    hundred, n = divmod(n, 100)
+    parts = []
+    if crore:
+        parts.append(f"{_int_to_hindi_words(crore)} करोड़")
+    if lakh:
+        parts.append(f"{_hindi_below_100(lakh)} लाख")
+    if thousand:
+        parts.append(f"{_hindi_below_100(thousand)} हज़ार")
+    if hundred:
+        parts.append(f"{_HINDI_ONES[hundred]} सौ")
+    if n:
+        parts.append(_hindi_below_100(n))
+    return " ".join(parts)
+
+# Localised currency / percent words for the languages we handle by name;
+# every other language falls back to English words for the number, which
+# still reads far better than spelled-out digits.
+_CURRENCY_WORD = {"en": "rupees", "hi": "रुपये", "bn": "টাকা", "kn": "ರೂಪಾಯಿ", "te": "రూపాయలు"}
+_PERCENT_WORD  = {"en": "percent", "hi": "प्रतिशत", "bn": "শতাংশ", "kn": "ಶೇಕಡಾ", "te": "శాతం"}
+
+def _number_to_words(int_part, lang):
+    if lang == "hi":
+        return _int_to_hindi_words(int_part)
+    if _NUM2WORDS_OK and lang in _NUM2WORDS_LANG:
+        try:
+            return num2words(int_part, lang=_NUM2WORDS_LANG[lang])
+        except Exception:
+            pass
+    if _NUM2WORDS_OK:
+        try:
+            return num2words(int_part, lang="en_IN")
+        except Exception:
+            pass
+    return str(int_part)
+
+_NUMBER_RE = re.compile(r'(?:(₹|Rs\.?|rs\.?)\s?)?(\d{1,3}(?:,\d{2,3})+|\d+)(\.\d+)?(\s?%)?')
+
+def normalize_numbers_for_speech(text, lang):
+    """Replace numerals in text with spoken words in the given language,
+    so edge-tts pronounces amounts naturally instead of digit-by-digit."""
+    def _replace(m):
+        currency_sign, whole, decimal, percent = m.groups()
+        # A short standalone number right after "helpline"/"1551" style refs
+        # is more natural read digit-by-digit — keep the well-known helpline
+        # number as-is rather than as a huge "cardinal".
+        raw = whole.replace(",", "")
+        if raw == "1551":
+            return m.group(0)
+        try:
+            int_part = int(raw)
+        except ValueError:
+            return m.group(0)
+        words = _number_to_words(int_part, lang)
+        if decimal:
+            digit_words = " ".join(
+                _number_to_words(int(d), lang) if lang == "hi" or not _NUM2WORDS_OK
+                else num2words(int(d), lang=_NUM2WORDS_LANG.get(lang, "en_IN"))
+                for d in decimal[1:]
+            )
+            point_word = "दशमलव" if lang == "hi" else "point"
+            words = f"{words} {point_word} {digit_words}"
+        if currency_sign:
+            words = f"{words} {_CURRENCY_WORD.get(lang, 'rupees')}"
+        if percent:
+            words = f"{words} {_PERCENT_WORD.get(lang, 'percent')}"
+        return words
+    return _NUMBER_RE.sub(_replace, text)
 
 def _is_rate_limited_tts(ip):
     now = datetime.now().timestamp()
@@ -1029,6 +1146,7 @@ def text_to_speech():
     if len(text) > MAX_TTS_CHARS:
         text = text[:MAX_TTS_CHARS]
 
+    text = normalize_numbers_for_speech(text, lang)
     voice, rate, pitch = TTS_VOICE_MAP.get(lang, DEFAULT_TTS_VOICE)
     try:
         audio = asyncio.run(_synthesize_speech(text, voice, rate, pitch))
