@@ -1591,6 +1591,6 @@ def translate_diagnosis_result():
     translations, cached = _translate_terms(terms, lang_name, domain_note, cache_key, _diagnosis_result_cache)
     return jsonify({"lang": lang, "lang_name": lang_name, "translations": translations, "cached": cached})
 
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=7860, debug=DEBUG_MODE)
+    port = int(os.getenv("PORT", 7860))
+    app.run(host="0.0.0.0", port=port, debug=DEBUG_MODE)
