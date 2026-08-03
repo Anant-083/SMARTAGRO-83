@@ -739,6 +739,24 @@ function pickLang(code) {
 /* ── Text to Speech — server-side (works on every device/OS) ────────
      Falls back to browser speechSynthesis only if the server call fails
      (e.g. offline), so it degrades gracefully instead of going silent. */
+async function speakReply(text, lang) {
+  try {
+    const res = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, lang })
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const audio = new Audio(URL.createObjectURL(blob));
+    audio.play();
+  } catch (e) {
+    console.warn("TTS failed:", e);
+  }
+}
+
+// After you get the reply from /api/chat:
+// speakReply(reply, currentLang);
   let currentAudio = null;
 
   window.toggleSpeak = async function (msgId) {
