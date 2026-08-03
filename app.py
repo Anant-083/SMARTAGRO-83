@@ -1284,13 +1284,11 @@ def _is_rate_limited_diagnose(ip: str) -> bool:
     _diagnose_rate[ip].append(now)
     return False
 
-KINDWISE_API_KEY = os.getenv("KINDWISE_API_KEY", "")
 
 @app.route("/api/diagnose", methods=["POST"])
 def diagnose_crop():
     if not KINDWISE_API_KEY:
         return jsonify({"error": "KINDWISE_API_KEY not set in .env"}), 500
-
     ip = request.remote_addr or "unknown"
     if _is_rate_limited_diagnose(ip):
         return jsonify({"error": "Too many requests. Please wait a moment."}), 429
@@ -1303,33 +1301,74 @@ def diagnose_crop():
         return jsonify({"error": "No image data received"}), 400
     if len(image_b64) > MAX_IMAGE_B64_LEN:
         return jsonify({"error": "Image too large. Please use an image under 1 MB."}), 413
-
-    try:
-        resp = requests.post(
-            "https://crop.kindwise.com/api/v1/identification?details=description,treatment,classification",
-            headers={"Api-Key": KINDWISE_API_KEY, "Content-Type": "application/json"},
-            json={"images": [image_b64], "similar_images": True},
-            timeout=45,
+    lang_name = LANG_NAMES.get(lang, "")
+    if lang != "en" and lang_name:
+        lang_instruction = (
+            f"\n\nIMPORTANT: Write ALL text values in {lang_name} "
+            f"(except JSON keys, numbers, chemical/brand names, units such as "
+            f"kg/ha, ml/L, g/ha, %, SL, EC, SC, WP, SG, NPK, and dose figures — "
+            f"keep those in English/digits as-is)."
         )
-        if resp.status_code != 201 and resp.status_code != 200:
-            return jsonify({"error": f"Kindwise error: {resp.status_code}"}), 502
+    else:
+        lang_instruction = ""
 
-        result = resp.json().get("result", {})
-        disease = (result.get("disease", {}).get("suggestions") or [{}])[0]
+    prompt = f"""You are an expert agricultural plant pathologist AI. Look very carefully at this crop image.
+Respond ONLY with valid JSON, no markdown or backticks:
+{{
+  "disease": "Exact disease name",
+  "confidence": 88,
+  "severity": "Mild or Moderate or Severe",
+  "affected_part": "Leaves/Stem/Fruit/Root/Cob",
+  "cause": "Specific pathogen and spread method",
+  "eco_remedies": [{{"remedy": "Remedy", "method": "Steps", "frequency": "How often", "effectiveness": 80}}],
+  "chemical_remedies": [{{"name": "Chemical", "dose": "Dose per litre", "interval": "Days between sprays"}}],
+  "prevention": ["tip1", "tip2", "tip3"],
+  "recovery_timeline": "Weeks for recovery"
+}}{lang_instruction}"""
 
-        payload = {
-            "disease": disease.get("name", "Unknown"),
-            "confidence": round(disease.get("probability", 0) * 100),
-            "details": disease.get("details", {}),
-            "is_healthy": result.get("is_healthy", {}).get("binary"),
-            "_lang": lang,
-        }
-        return jsonify(payload)
+    vision_models = [
+        "qwen/qwen3.6-27b",
+    ]
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
 
-    except Exception as e:
-        print(f"[Diagnose] Kindwise error: {e}")
-        return jsonify({"error": "Diagnosis failed. Try again."}), 500
+    for model in vision_models:
+        try:
+            sys_prompt = "Expert plant pathologist. Return ONLY valid JSON."
+            if lang != "en" and lang_name:
+                sys_prompt += f" All free-text values must be in {lang_name}."
 
+            body = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                        {"type": "text", "text": prompt}
+                    ]}
+                ],
+                "temperature": 0.2,
+                "max_tokens":  1400,
+                "reasoning_effort": "none",  # skip <think> mode so JSON lands directly in content
+            }
+            resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=45)
+            if resp.status_code in (429, 500, 503):
+                continue
+            if resp.status_code != 200:
+                continue
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            cleaned = re.sub(r"```(?:json)?", "", raw).replace("```", "").strip()
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if match:
+                result = json.loads(match.group())
+                # Tag with the language so the frontend can skip the
+                # redundant /api/translate-diagnosis-result round-trip.
+                result["_lang"] = lang
+                return jsonify(result)
+        except Exception as e:
+            print(f"[Diagnose] {model}: {e}")
+            continue
+
+    return jsonify({"error": "All vision models failed. Check your GROQ_API_KEY in .env"}), 500
 
 
 # ─── Alerts ──────────────────────────────────────────────────────────────────
