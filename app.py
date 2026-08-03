@@ -1075,7 +1075,7 @@ def kisan_chat():
          return jsonify({"error": "No messages"}), 400
  
      lang_name = LANG_NAMES.get(lang, "English")
--    system_prompt = f"""You are SmartAgro Assistant, a warm and knowledgeable friend to Indian farmers.
+-system_prompt = f"""You are SmartAgro Assistant, a warm and knowledgeable friend to Indian farmers.
 -Reply in {lang_name}, in its native script (not transliteration). Keep it natural and conversational —
 -like a helpful neighbour talking to another, not a formal report. Short, practical, encouraging.
 -You know about: crop diseases, weather, pesticide usage, mandi prices, government schemes
