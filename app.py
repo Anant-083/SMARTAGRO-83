@@ -41,7 +41,7 @@ LANG_NAMES = {
     "ks":"Kashmiri","ne":"Nepali","sd":"Sindhi","kok":"Konkani","mni":"Manipuri",
     "brx":"Bodo","doi":"Dogri","sa":"Sanskrit",
 }
-_UNSUPPORTED_LANGS = {"sat", "brx", "doi", "mni", "mai", "kok", "sa"}
+_UNSUPPORTED_LANGS = set()
 
 print(f"[AgroSmart] Groq key:    {'OK (' + GROQ_API_KEY[:8] + '...)' if GROQ_API_KEY else 'MISSING'}")
 print(f"[AgroSmart] Weather key: {'OK' if OPENWEATHER_API_KEY else 'MISSING'}")
