@@ -97,3 +97,31 @@ self.addEventListener('fetch', event => {
         })
     );
 });
+
+// ── Push notifications — pictorial alerts (added) ──────────────────────
+self.addEventListener('push', function (event) {
+    let data = {};
+    try { data = event.data ? event.data.json() : {}; } catch (e) { data = {}; }
+
+    const title = data.title || 'SmartAgro Alert';
+    const body  = data.body  || '';
+    const condition = data.condition || 'good';
+    const image = `/static/icons/${condition}.png`;
+
+    const options = {
+        body: body,
+        icon: image,
+        image: image,
+        badge: '/static/icons/icon-192.png',
+        vibrate: [200, 100, 200],
+        data: { url: data.url || '/alerts' },
+    };
+
+    event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', function (event) {
+    event.notification.close();
+    const url = event.notification.data?.url || '/alerts';
+    event.waitUntil(clients.openWindow(url));
+});
