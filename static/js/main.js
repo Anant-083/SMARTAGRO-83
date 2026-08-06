@@ -270,14 +270,65 @@ document.addEventListener('DOMContentLoaded', () => {
     })();
 });
 /* ── PWA Service Worker Registration ───────── */
+
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/static/service-worker.js')
-            .then(reg => console.log('SmartAgro SW registered:', reg.scope))
+            .then(reg => {
+                console.log('SmartAgro SW registered:', reg.scope);
+                subscribeToPush(reg);
+            })
             .catch(err => console.error('SW registration failed:', err));
     });
 }
 
+/* ── Push notification subscribe flow ───────── */
+async function subscribeToPush(reg) {
+    if (!('PushManager' in window)) {
+        console.log('[Push] Not supported on this browser.');
+        return;
+    }
+
+    // Ask permission only once — don't nag the farmer on every visit.
+    if (localStorage.getItem('agrosmart_push_asked')) return;
+
+    try {
+        const permission = await Notification.requestPermission();
+        localStorage.setItem('agrosmart_push_asked', '1');
+        if (permission !== 'granted') {
+            console.log('[Push] Permission denied.');
+            return;
+        }
+
+        const keyRes = await fetch('/api/vapid-public-key');
+        const { key } = await keyRes.json();
+        if (!key) { console.log('[Push] No VAPID key configured on server.'); return; }
+
+        const subscription = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(key),
+        });
+
+        await fetch('/api/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(subscription),
+        });
+
+        console.log('[Push] Subscribed successfully.');
+    } catch (e) {
+        console.log('[Push] Setup failed:', e);
+    }
+}
+
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+}
 /* ══════════════════════════════════════════════
    INSTALL APP — works on desktop & mobile,
    available from the navbar on every page.
