@@ -1,15 +1,21 @@
 /* =========================================================================
    kisan-helper.js  (merged from chatbot.js + kisan-helper.js)
    -------------------------------------------------------------------------
-   Includes everything from both files:
+   Includes everything from both files, PLUS:
+     - Whisper STT fallback for browsers without Web Speech API (Safari/iOS)
+     - WhatsApp-style voice recording (no short auto-cutoff, live timer,
+       3-minute safety ceiling only)
+     - Clickable section links in bot replies (Diagnose / Market / Alerts)
+
+   All original features kept exactly as-is:
      1. All 23 languages app.py's LANG_NAMES supports, with a language
         picker shown on first open.
      2. Typewriter animation — bot replies type themselves out; tap the
         bubble while it animates to skip to the full text.
      3. Live interim voice captions — words appear in the input box AS
-        you speak, not just after you stop.
+        you speak, not just after you stop (native SpeechRecognition path).
      4. Weather context — window.weatherData?.current is forwarded with
-        every /api/chat request (from chatbot.js).
+        every /api/chat request.
      5. Backward-compatible global aliases so any existing code that calls
         toggleChat(), clearChat(), startVoice(), sendMessage(), closeChat(),
         or handleChatKey() continues to work unchanged.
@@ -18,6 +24,10 @@
      request:  { messages: [{role, content}, ...], lang: "hi",
                  weather_context: { ...window.weatherData?.current } }
      response: { reply: "..." }  or  { error: "..." }
+
+   /api/stt contract (Whisper fallback):
+     request:  multipart/form-data, field "audio" = webm blob
+     response: { text: "..." }  or  { error: "..." }
 
    Requires Font Awesome to already be loaded on the page.
    ========================================================================= */
@@ -211,7 +221,7 @@
   background: linear-gradient(135deg, #166534, #22c55e);
   color: #fff; border-bottom-right-radius: 4px;
 }
-.kw-msg-footer { display: flex; align-items: center; gap: 6px; padding: 0 2px; }
+.kw-msg-footer { display: flex; align-items: center; gap: 6px; padding: 0 2px; flex-wrap: wrap; }
 .kw-msg.user .kw-msg-footer { justify-content: flex-end; }
 .kw-msg-time { font-size: .62rem; color: var(--text-3, #6b8c6d); }
 .kw-speak-btn {
@@ -227,6 +237,20 @@
 }
 .kw-speak-btn.speaking { animation: speakPulse .9s ease-in-out infinite; }
 @keyframes speakPulse { 0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.35)} 50%{box-shadow:0 0 0 5px rgba(74,222,128,0)} }
+
+/* Clickable section link chip shown under a bot reply, e.g. "Open Diagnose" */
+.kw-link-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: .68rem; font-weight: 600;
+  padding: 5px 10px; border-radius: 14px;
+  background: rgba(74,222,128,.12); border: 1px solid rgba(74,222,128,.35);
+  color: #4ade80; text-decoration: none; margin-top: 2px;
+  transition: background .15s;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.kw-link-chip:active { background: rgba(74,222,128,.25); }
+.kw-link-chip i { font-size: .68rem; }
+body.light-theme .kw-link-chip { background: rgba(22,101,52,.08); border-color: rgba(22,101,52,.3); color: #166534; }
 
 .kw-typing { display: flex; gap: 4px; align-items: center; padding: 4px 0; }
 .kw-typing span {
@@ -284,6 +308,21 @@
 }
 .kw-send-btn:active { transform: scale(1.08); }
 
+/* Recording duration pill shown above the input bar while recording via
+   the Whisper fallback path (WhatsApp-style — counts up, no forced cutoff) */
+.kw-rec-pill {
+  display: none; align-items: center; gap: 8px;
+  padding: 6px 14px; margin: 0 12px 8px;
+  background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.35);
+  border-radius: 16px; font-size: .74rem; color: #f87171; font-weight: 600;
+  flex-shrink: 0;
+}
+.kw-rec-pill.show { display: flex; }
+.kw-rec-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: #f87171;
+  animation: kwp 1.2s ease-in-out infinite;
+}
+
 body.light-theme #kisanWindow   { background: #fff; }
 body.light-theme .kw-msg.bot .kw-bubble { background: #f0fdf4; color: #1a2e1c; border-color: rgba(22,101,52,.15); }
 body.light-theme .kw-input-bar  { background: #f9fafb; }
@@ -315,6 +354,14 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
   .kw-lang-grid { grid-template-columns: repeat(2, 1fr); }
 }`;
   document.head.appendChild(S);
+
+  /* Recording duration pill, inserted just above the input bar */
+  const kisanWindowEl = document.getElementById('kisanWindow');
+  const inputBarEl = document.querySelector('.kw-input-bar');
+  if (inputBarEl) {
+    inputBarEl.insertAdjacentHTML('beforebegin',
+      `<div class="kw-rec-pill" id="kisanRecPill"><span class="kw-rec-dot"></span><span id="kisanRecTime">00:00</span> — tap mic to stop</div>`);
+  }
 
   /* ── State ────────────────────────────────────────────────────────── */
   let isOpen        = false;
@@ -364,7 +411,7 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     as:   'নমস্কাৰ! মই SmartAgro সহায়ক। সোধক:\n• শস্যৰ ৰোগ\n• বতৰ\n• বজাৰ দাম\n• চৰকাৰী আঁচনি',
     ur:   'السلام علیکم! میں SmartAgro مددگار ہوں۔ پوچھیں:\n• فصل کی بیماریاں\n• موسم\n• منڈی بھاؤ\n• سرکاری اسکیمیں',
     mai:  'प्रणाम किसान भाय! हम SmartAgro किसान सहायक छी। मौसम, फसल, बाजार भाव बारे पुछू।',
-    sat:  'ᱡᱚᱦᱟᱨ! ᱤᱧ SmartAgro ᱜᱚᱲᱚ ᱠᱟᱱᱟᱭ। ᱟᱢᱟᱜ ᱠᱷᱮᱛ ᱨᱮᱭᱟᱜ ᱵᱟᱵᱚᱛ ᱯᱩᱪᱷᱟᱣ ᱢᱮ।',
+    sat:  'ᱡᱚᱦᱟᱨ! ᱤᱧ SmartAgro ᱜᱚᱲᱚ ᱠᱟᱱᱟᱭ। ᱟᱢᱟᱜ ᱠᱷᱮᱛ ᱨᱮᱭᱟᱜ ᱵᱟᱵᱚᱛ ᱯᱩᱪᱷᱟᱣ ᱮ।',
     ks:   'اَداب! بہٕ چھُس SmartAgro مددگار۔ کھیتی، موسم یا منڈی بھاؤ باپت پوچھِو۔',
     ne:   'नमस्ते किसान साथी! म SmartAgro किसान सहायक हुँ। मौसम, बाली, बजार मूल्य वा सरकारी योजनाबारे सोध्नुहोस्।',
     sd:   'नमस्ते! मां SmartAgro सहायक आहियां. फसल, मौसम, या बाजार भाव बारे पुछो.',
@@ -374,6 +421,33 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     doi:  'नमस्ते किसान भाई! मैं SmartAgro किसान सहायक आं। मौसम, फसल, बजार भाव बारै पुच्छो।',
     sa:   'नमस्ते कृषकमित्र! अहं SmartAgro कृषकसहायकः अस्मि। वायुमण्डलं, कृषिं, विपणिमूल्यं वा सरकारीयोजनाः विषये पृच्छन्तु।',
   };
+
+  /* ── Clickable section links inside bot replies ─────────────────────
+     Small pill link shown under a bot bubble when the question/answer
+     matches a known section of the app (Diagnose / Market / Alerts).
+     Only ONE chip is shown per reply — first keyword match wins. ─────── */
+  const SECTION_LINKS = [
+    {
+      keywords: ['disease','diagnos','pest attack','rog','bimari','fungus','upload photo','leaf spot','infection','keeda'],
+      label: 'Open Diagnose Crop', href: '/diagnose', icon: 'fa-camera'
+    },
+    {
+      keywords: ['mandi','market price','bhav','rate today','msp','price of','sell my crop','bazar bhav'],
+      label: 'Open Market Prices', href: '/market', icon: 'fa-chart-line'
+    },
+    {
+      keywords: ['alert','warning','forecast risk','weather danger','storm','heavy rain warning','frost warning'],
+      label: 'View Alerts', href: '/alerts', icon: 'fa-triangle-exclamation'
+    },
+  ];
+
+  function findSectionLink(text) {
+    const lower = (text || '').toLowerCase();
+    for (const s of SECTION_LINKS) {
+      if (s.keywords.some(k => lower.includes(k))) return s;
+    }
+    return null;
+  }
 
   /* ── Helpers ──────────────────────────────────────────────────────── */
   function getAppLang() {
@@ -457,7 +531,10 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
       setTimeout(() => { overlay.style.display = 'none'; }, 280);
       stopSpeaking();
       if (activeTyper) activeTyper.finish();
-      if (isListening) recognition?.stop();
+      if (isListening) {
+        if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+        else recognition?.stop();
+      }
     }
   };
 
@@ -517,7 +594,9 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
       .replace(/•/g, '<span style="color:var(--green);margin-right:4px;font-weight:700">•</span>');
   }
 
-  function addBotMsg(text) {
+  /* addBotMsg now optionally takes the original user question so it can
+     work out whether a "jump to section" chip is worth showing. */
+  function addBotMsg(text, userQuestion) {
     const list = document.getElementById('kisanMessages');
     if (!list) return;
     const id  = 'msg_' + Date.now() + '_' + Math.floor(Math.random() * 9999);
@@ -525,6 +604,11 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     div.className    = 'kw-msg bot';
     div.id           = id;
     div.dataset.text = text;
+
+    const link = findSectionLink((userQuestion || '') + ' ' + text);
+    const linkHtml = link
+      ? `<a class="kw-link-chip" href="${link.href}"><i class="fas ${link.icon}"></i>${link.label}</a>`
+      : '';
 
     div.innerHTML = `
       <div class="kw-msg-avatar">🌾</div>
@@ -535,6 +619,7 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
             <i class="fas fa-volume-up"></i>
           </button>
           <span class="kw-msg-time">${getTime()}</span>
+          ${linkHtml}
         </div>
       </div>`;
     list.appendChild(div);
@@ -648,16 +733,16 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
       if (typing) typing.remove();
 
       if (!res.ok || data.error) {
-        addBotMsg(data.error || 'Sorry, try again.');
+        addBotMsg(data.error || 'Sorry, try again.', msg);
       } else {
         const reply = data.reply || 'Sorry, try again.';
-        addBotMsg(reply);
+        addBotMsg(reply, msg);
         chatHistory.push({ role: 'assistant', content: reply });
         if (chatHistory.length > 20) chatHistory = chatHistory.slice(-20);
       }
     } catch {
       if (typing) typing.remove();
-      addBotMsg('Connection error. Please try again.');
+      addBotMsg('Connection error. Please try again.', msg);
     } finally {
       if (sendBtn) sendBtn.disabled = false;
       if (micBtn)  micBtn.disabled  = false;
@@ -715,10 +800,19 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     }
   }
 
-  /* ── Voice Input — live interim captions ─────────────────────────── */
+  /* ── Voice Input — native Web Speech API (Chrome/Android) ──────────
+     Live interim captions appear in the input box as you speak.
+     Auto-stops on the browser's own silence detection (onend). ────── */
   window.toggleKisanMic = function () {
+    // If a Whisper-fallback recording is already running, a second tap
+    // should stop it — handled first regardless of SpeechRecognition support.
+    if (isListening && mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+      return;
+    }
+
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { showKisanToast('Voice not supported. Use Chrome browser.'); return; }
+    if (!SR) { startWhisperRecording(); return; }
     if (isListening) { recognition?.stop(); return; }
     if (!isOpen) window.toggleKisan();
     if (!langChosen) {
@@ -786,11 +880,106 @@ body.light-theme .kw-speak-btn  { border-color: rgba(22,101,52,.25); color: rgba
     }
   }
 
+  /* ── Whisper STT fallback (Safari/iOS — no Web Speech API) ──────────
+     Records like WhatsApp: no short forced cutoff, live mm:ss counter,
+     stops only when the user taps the mic again (3-min safety ceiling
+     only, to stop an accidentally-open mic from recording forever). ─── */
+  let mediaRecorder        = null;
+  let audioChunks          = [];
+  let recordTimerInterval  = null;
+  let recordStartTime      = 0;
+
+  function startRecordTimer() {
+    recordStartTime = Date.now();
+    const pill = document.getElementById('kisanRecPill');
+    const time = document.getElementById('kisanRecTime');
+    if (pill) pill.classList.add('show');
+    recordTimerInterval = setInterval(() => {
+      const secs = Math.floor((Date.now() - recordStartTime) / 1000);
+      const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+      const ss = String(secs % 60).padStart(2, '0');
+      if (time) time.textContent = `${mm}:${ss}`;
+      // Safety cap only — WhatsApp itself has no hard limit, but a mic left
+      // open by accident shouldn't record indefinitely. Generous 3-minute cap.
+      if (secs >= 180 && mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+    }, 1000);
+  }
+
+  function stopRecordTimer() {
+    clearInterval(recordTimerInterval);
+    recordTimerInterval = null;
+    const pill = document.getElementById('kisanRecPill');
+    const time = document.getElementById('kisanRecTime');
+    if (pill) pill.classList.remove('show');
+    if (time) time.textContent = '00:00';
+  }
+
+  async function startWhisperRecording() {
+    if (isListening) return;
+    if (!isOpen) window.toggleKisan();
+    if (!langChosen) {
+      chosenLang = localStorage.getItem('agrosmart_lang') || 'en';
+      langChosen = true;
+      const picker = document.getElementById('kisanLangPicker');
+      if (picker) picker.style.display = 'none';
+      updateSubLabel(chosenLang);
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunks = [];
+      mediaRecorder = new MediaRecorder(stream);
+
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+
+      mediaRecorder.onstop = async () => {
+        stopRecordTimer();
+        stream.getTracks().forEach(t => t.stop());
+        isListening = false;
+        updateMicState(false);
+
+        const blob = new Blob(audioChunks, { type: 'audio/webm' });
+        if (blob.size < 500) { showKisanToast('Recording too short. Try again.'); return; }
+
+        showKisanToast('Transcribing...');
+        const formData = new FormData();
+        formData.append('audio', blob, 'voice.webm');
+
+        try {
+          const res  = await fetch('/api/stt', { method: 'POST', body: formData });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.error) {
+            showKisanToast(data.error || 'Could not transcribe audio.');
+            return;
+          }
+          const text = (data.text || '').trim();
+          const inp = document.getElementById('kisanInput');
+          if (inp && text) { inp.value = text; window.sendKisanMessage(); }
+          else showKisanToast('No speech detected.');
+        } catch {
+          showKisanToast('Connection error during transcription.');
+        }
+      };
+
+      mediaRecorder.start();
+      isListening = true;
+      updateMicState(true);
+      startRecordTimer();
+    } catch {
+      showKisanToast('Mic access denied or unavailable.');
+    }
+  }
+
   /* ── New Chat ─────────────────────────────────────────────────────── */
   window.newKisanChat = function () {
     stopSpeaking();
     if (activeTyper) activeTyper.finish();
-    if (isListening) recognition?.stop();
+    if (isListening) {
+      if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+      else recognition?.stop();
+    }
     chatHistory = [];
     langChosen  = false;
     chosenLang  = null;
