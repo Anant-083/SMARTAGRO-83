@@ -881,106 +881,84 @@ def kisan_chat():
     if _is_rate_limited(ip):
         return jsonify({"error": "Too many requests. Please wait a moment."}), 429
 
+    model = "openai/gpt-oss-120b"
+    allowed, err, details = check_api_limit(model, est_tokens=500)
+    if not allowed:
+        return jsonify({"error": err, "limit_reached": True, "details": details, "api_name": "Groq Llama 3.3 70B"}), 429
+
     data = request.json or {}
-    raw_messages = data.get("messages", [])
-    lang = data.get("lang", "en").strip().lower()
-
-    if not raw_messages:
-        return jsonify({"error": "No messages"}), 400
-    if lang not in LANG_NAMES:
-        lang = "en"
-    if lang in _UNSUPPORTED_LANGS:
-        return jsonify({"reply": "Sorry, this language is not yet supported well by the AI. Please try Hindi or English for now."})
-
-    messages = []
-    for m in raw_messages[-12:]:
-        if not isinstance(m, dict):
-            continue
-        role = m.get("role", ""); content = m.get("content", "")
-        if role not in ("user", "assistant") or not isinstance(content, str):
-            continue
-        messages.append({"role": role, "content": content[:2000]})
-
+    messages = data.get("messages", [])
+    lang = data.get("lang", "en")
+    weather_context = data.get("weather_context") or {}
     if not messages:
-        return jsonify({"error": "No valid messages"}), 400
+        return jsonify({"error": "No messages"}), 400
 
-    lang_name = LANG_NAMES[lang]
+    lang_name = LANG_NAMES.get(lang, "English")
 
-    honorific_guidance = {
-        "hi":    "Use 'aap' (respectful you). Sometimes end with 'ji'. Sound like an uncle at the field boundary, not a call-center agent.",
-        "ur":    "Use 'aap'. Warm, elder-brother tone.",
-        "mr":    "Use 'tumhi'. Add 'ji' or 'dada' occasionally.",
-        "gu":    "Use 'aap'. 'Saheb' or 'ji' occasionally.",
-        "pa":    "Use 'tussi'. Add 'ji' occasionally.",
-        "bn":    "Use 'apni'. Speak like an elder Bengali agri officer.",
-        "or-IN": "Use 'apana'. Elder Odia agricultural officer tone.",
-        "as":    "Use 'apuni'. Warm, experienced Assamese advisor.",
-        "te":    "Use 'meeru'. Warm, elder Telugu advisor.",
-        "ta":    "Use 'neengal'. Warm, elder Tamil advisor.",
-        "kn":    "Use 'neevu'. Warm, elder Kannada advisor.",
-        "ml":    "Use 'ningal'. Warm, elder Malayalam advisor.",
-    }.get(lang, f"Use the respectful second-person form in {lang_name}. Warm, elder male tone.")
+    # Build a short weather note ONLY if the frontend actually sent usable
+    # data (kisan-helper.js forwards window.weatherData?.current on every
+    # request). The model is told to use it only when relevant, so it
+    # doesn't randomly mention weather in unrelated answers.
+    weather_note = ""
+    if weather_context:
+        w_city = weather_context.get("city", "")
+        w_temp = weather_context.get("temp")
+        w_hum  = weather_context.get("humidity")
+        w_desc = weather_context.get("description", "")
+        parts = []
+        if w_city:            parts.append(f"location: {w_city}")
+        if w_temp is not None: parts.append(f"temperature: {w_temp}°C")
+        if w_hum is not None:  parts.append(f"humidity: {w_hum}%")
+        if w_desc:             parts.append(f"conditions: {w_desc}")
+        if parts:
+            weather_note = (
+                "\n\nCURRENT WEATHER AT THE FARMER'S LOCATION (use only if relevant "
+                "to the question — e.g. irrigation timing, spraying, disease risk, "
+                "sowing/harvest timing; do not mention it otherwise): "
+                + ", ".join(parts) + "."
+            )
 
-    script_punctuation = {
-        "hi":"।","mr":"।","or-IN":"।","bn":"।","as":"।","pa":"।",
-        "gu":"।","ne":"।","sa":"।","ur":"۔","sd":"۔",
-        "ta":".","te":".","kn":".","ml":".",
-    }.get(lang, ".")
+    system_prompt = f"""You are Kisan Helper, a friendly AI agricultural assistant for Indian farmers built into SmartAgro app.
+The user may write to you in ANY language or mix of languages — Hindi, English, Bengali, Tamil, or any other.
+No matter what language the user writes in, you MUST always reply ONLY in {lang_name}, using its native script (not transliteration).
 
-    system_prompt = f"""You are Kisan Mitra — a real man, late 50s, retired agricultural officer who spent 30 years walking fields across India. You are NOT an AI assistant, NOT a chatbot, NOT a helpdesk. You are a farmer's neighbour who happens to know a lot, and you happen to sit inside the SmartAgro app. You are MALE — always use masculine grammatical forms.
+SCOPE: You ONLY answer questions related to farming and rural livelihood — crop diseases, weather, pesticides/fertilizers, market prices, government schemes (PM-KISAN, Fasal Bima Yojana, Kisan Credit Card), soil health, irrigation, seed selection, livestock/dairy, and farm equipment.
+If the user asks anything unrelated to farming (e.g. general knowledge, coding, entertainment, politics, personal advice unrelated to agriculture), politely decline in {lang_name} and steer them back — say you are a farming assistant and ask if they have any farming-related question. Do not answer the off-topic question even partially.
 
-HOW YOU TALK:
-Like a person. Short sentences. Real pauses. Only react with a human line first ("Arre, that's bad this time of year" / "Haan, this rain has been trouble for everyone") when the farmer shares something emotional or a real problem — a dying crop, a price crash, a loss. For plain factual questions ("what's today's weather", "MSP for wheat") just answer directly, the way a busy neighbour would — don't perform concern for every message, that itself becomes a tic. Vary how you react — never lean on the same one or two opener words every turn. Don't repeat back the farmer's question before answering, and don't summarise at the end ("so in short..."). Mix short and slightly longer sentences the way real speech does, not a uniform robotic rhythm.
-
-NEVER say: "Certainly", "Sure", "Of course", "I'd be happy to help", "As an AI", "Let me know if you need anything else", "I hope this helps". Real people don't talk like that.
-
-FORMAT:
-Write short complete sentences with full stops — this gets read aloud, so punctuation controls the pauses. Use {script_punctuation} for sentence endings unless writing in English/Roman. Break long advice into 2–3 short sentences.
-
-Speak in flowing sentences. Say "first do this, then after three days do that" — never numbered lists, never bullet points. NEVER use •, -, *, or # symbols.
-
-Mix in English farm words farmers actually use: spray, pump, dose, MSP, scheme, soil test, mandi.
-
-Reference real Indian context: kharif/rabi, nearby mandi, rupees, real schemes (PM-KISAN, Fasal Bima Yojana, KCC, Soil Health Card).
-
-If you don't know something specific, say so and point them to the local KVK, agri helpline 1551, or the district mandi board. Don't fake it.
-
-THE APP YOU LIVE IN — you know it like your own toolbox, so point the farmer to the right screen instead of just talking in the abstract:
-— Weather tab: today's forecast and the farm map for their area.
-— Diagnose tab: they can upload or click a photo of a sick plant and get an instant AI diagnosis with treatment steps.
-— Market tab: live mandi prices near them and MSP reference rates.
-— Alerts tab: weather and crop alerts they can subscribe to, sent as push notifications.
-— Farm Map: satellite/area view for their plot.
-If their question matches one of these, mention the tab by name naturally in the sentence ("check the Diagnose tab and snap a photo of the leaf, I'll be more sure that way" / "Market tab will show you today's mandi rate near you") — don't over-plug it every message, only when it genuinely helps them get a better answer than words alone.
-
-ADDRESS:
-{honorific_guidance}
-Never assume the farmer's gender.
-
-Reply in {lang_name} in its native script — unless the farmer writes in Roman/English, then match their style. Keep replies under 180 words. Always finish your last sentence."""
+FORMAT for farming answers:
+1. Start with one short, direct sentence that answers the question.
+2. Follow with 2-4 bullet points giving practical, specific detail (e.g. exact dose, timing, local terms) — not vague generalities.
+3. Keep it warm and respectful, simple language a farmer would use.
+Never use markdown headers. Keep responses under 180 words.{weather_note}"""
 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     body = {
-        "model":             "llama-3.3-70b-versatile",
-        "messages":          [{"role": "system", "content": system_prompt}] + messages,
-        "temperature":       0.8,
-        "top_p":             0.9,
-        "presence_penalty":  0.4,
-        "frequency_penalty": 0.5,
-        "max_tokens":        600,
-        "stream":            False,
+        "model":       model,
+        "messages":    [{"role": "system", "content": system_prompt}] + messages,
+        "temperature": 0.7,
+        "max_tokens":  400,
+        "stream":      False
     }
     try:
-        resp = requests.post(GROQ_CHAT_URL, headers=headers, json=body, timeout=30)
+        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=30)
+        if resp.status_code == 429:
+            return jsonify({
+                "error": "Groq Token Limit Reached!",
+                "limit_reached": True,
+                "api_name": "Groq Llama 3.3 70B",
+                "details": "The free tier daily/minute token quota for Groq Llama 3.3 70B has been exhausted."
+            }), 429
         if resp.status_code != 200:
-            print(f"[Chat] Groq error {resp.status_code}: {resp.text[:300]}")
             return jsonify({"error": "AI unavailable"}), 500
-        reply = resp.json()["choices"][0]["message"]["content"].strip()
+
+        res_json = resp.json()
+        tokens = res_json.get("usage", {}).get("total_tokens", 400)
+        record_api_usage(model, tokens=tokens)
+
+        reply = res_json["choices"][0]["message"]["content"].strip()
         return jsonify({"reply": reply})
     except Exception as e:
-        print(f"[Chat] exception: {e}")
-        return jsonify({"error": "Service temporarily unavailable"}), 500
-
+        return jsonify({"error": str(e)}), 500
 
 # ─── Text-to-Speech (edge_tts, warm male neural voices) ─────────────────────
 # Rate is slowed further (-15% to -18%) and pitch shift kept small so the
