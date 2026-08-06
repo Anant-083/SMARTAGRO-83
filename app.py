@@ -1185,6 +1185,18 @@ def push_subscribe():
         _push_subscriptions.append(sub)
     return jsonify({"status": "subscribed", "total": len(_push_subscriptions)})
 
+def _condition_for_alert(alert_type: str, category: str) -> str:
+    """Maps an alert's type/category to one of 4 pictorial icons a farmer
+    can recognize at a glance, without needing to read any text."""
+    if alert_type == "danger":
+        return "danger"
+    if category and "frost" in category.lower():
+        return "frost"
+    if alert_type == "warning":
+        return "warning"
+    return "good"  # type == "info" — safe/favorable conditions
+
+
 @app.route("/api/send-alert", methods=["POST"])
 def push_send_alert():
     if not _PUSH_AVAILABLE:
@@ -1192,21 +1204,36 @@ def push_send_alert():
     if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
         return jsonify({"error": "VAPID keys not configured"}), 500
 
-    data = request.json or {}
-    title = data.get("title", "SmartAgro Alert")
-    body  = data.get("body", "")
+    data       = request.json or {}
+    title      = data.get("title", "SmartAgro Alert")
+    body       = data.get("body", "")
+    alert_type = data.get("type", "info")      # "danger" | "warning" | "info"
+    category   = data.get("category", "")
+    condition  = _condition_for_alert(alert_type, category)
+
+    payload = _json.dumps({
+        "title": title,
+        "body": body,
+        "condition": condition,   # tells the service worker which picture to show
+        "url": "/alerts",
+    })
+
     sent, failed = 0, 0
     for sub in list(_push_subscriptions):
         try:
-            webpush(subscription_info=sub,
-                    data=_json.dumps({"title": title, "body": body}),
-                    vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims=VAPID_CLAIMS)
+            webpush(
+                subscription_info=sub,
+                data=payload,
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims=VAPID_CLAIMS
+            )
             sent += 1
         except WebPushException:
             failed += 1
             if sub in _push_subscriptions:
                 _push_subscriptions.remove(sub)
-    return jsonify({"status": "sent", "sent": sent, "failed": failed})
+
+    return jsonify({"status": "sent", "sent": sent, "failed": failed, "condition": condition})
 
 
 # ─── Speech-to-Text (Groq Whisper) ──────────────────────────────────────────
