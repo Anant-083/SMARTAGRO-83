@@ -1,6 +1,6 @@
 /* =========================================================================
    kisan-helper.js  (merged from chatbot.js + kisan-helper.js)
-   -------------------------------------------------------------------------
+   -------------------------------------------------------------------------   
    Includes everything from both files, PLUS:
      - Whisper STT fallback for browsers without Web Speech API (Safari/iOS)
      - WhatsApp-style voice recording (no short auto-cutoff, live timer,
